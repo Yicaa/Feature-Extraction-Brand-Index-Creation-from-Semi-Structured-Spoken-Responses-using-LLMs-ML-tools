@@ -1,0 +1,187 @@
+---
+title: "TFM - Classification of semi-structered answers in audio"
+author: "Yijia Lin, supervised by Francisco Javier Nogales Martín"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::html_clean:
+    lightbox: false
+    thumbnails: false
+    toc: yes
+    toc_float: true
+    toc_depth: 3
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Prerequisites
+
+To run the audio transcription and classification pipeline, the
+following tools and libraries must be installed:
+
+1.  **FFmpeg**
+
+Install using:
+
+```{bash}
+brew install ffmpeg  # if the computer is MacOS
+```
+
+FFmpeg is a command-line tool for processing audio and video files. It
+is required because OpenAI Whisper depends on FFmpeg to load and convert
+audio files (e.g., .mp3, .wav, .m4a) into a format suitable for
+transcription. On the other hand, some other file format like .amr or
+.mov could be not be read by OpenAI Whisper, and this tool can help with
+format transformation. Installing it via Homebrew ensures it is
+available system-wide on macOS.
+
+<br>
+
+2.  **The IDE of R studio and the interpreter of Python 3**
+
+This notebook will be using both R and Python languages, so it's
+important to make sure the R studio and Python 3 are installed.
+
+<br>
+
+3.  **Python Libraries**
+
+Install using:
+
+```{bash}
+pip3 install openai-whisper openai pandas openai
+```
+
+These libraries serve the following purposes:
+
+**openai-whisper**: Enables local speech-to-text transcription using
+OpenAI's Whisper model.
+
+**openai**: Provides access to OpenAI's API (e.g., GPT-4) to analyze and
+classify open-ended responses.
+
+**pandas**: A data analysis library used for reading Excel files,
+applying classification functions row-by-row, and exporting results.
+
+<br>
+
+4.  **R Libraries**
+
+Install using:
+
+```{r}
+#install.packages("reticulate")
+library(reticulate)
+library(tidyverse)
+library(readxl)
+library(conflicted)
+library(stringr)
+
+#avoid conflicts in packages
+conflicted::conflict_prefer("filter", "dplyr")
+conflicted::conflict_prefer("select", "dplyr")
+```
+
+<br>
+
+## Data Cleaning & Processing
+
+### Read the data
+
+```{r}
+raw <- read_excel("raw data/Survey data.xlsx")
+```
+
+### Tidy and clean the data
+
+The first step will be cleaning the data! Given the limit of structure
+of Google Forms, the raw spreadsheet is not in the cleanest way, so I
+will firstly try to tidy it. For any bank assigned to the respondents,
+the structure of the survey was the same. Therefore, I'll try to combine
+all the information in the same columns instead of having dobbled
+columns.
+
+Before that, I'll specify for each row the assigned bank according to
+the random assignation:
+
+```{r}
+raw1 <- raw |>
+  rename(assignation = `Asignación de marca: Selecciona una opción aleatoria para que se te asigne una marca.`) |>
+  mutate(bank = case_when(
+    str_detect(assignation, "◻") ~ "BBVA",
+    str_detect(assignation, "◇") ~ "BBVA",
+    str_detect(assignation, "○") ~ "CaixaBank",
+    str_detect(assignation, "⌔") ~ "CaixaBank",
+    str_detect(assignation, "⭐") ~ "CaixaBank",
+    TRUE ~ NA_character_
+  )) |> 
+  relocate(bank, .after = assignation)
+```
+
+Then, I will process separately the data for BBVA and CaixaBank before
+joining them into the main table:
+
+```{r}
+raw1 <- raw1 |> 
+  mutate(respondent_id = row_number()) |> #Create respondent ID for later joint
+  relocate(respondent_id, .after = "Marca temporal")
+```
+
+```{r}
+bbva_long <- raw1 |> 
+  filter(bank == "BBVA") |> 
+  drop_na(matches("^La marca de banco que se te ha asignado es: BBVA")) |> 
+  select(respondent_id, bank,
+         awareness_audio = "Por favor, graba un audio de 10 segundos (y súbelo aquí) respondiendo a la siguiente pregunta:\n\n¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?...9"    ,
+         main_audio = matches("^La marca de banco que se te ha asignado es: BBVA"),
+         awareness = matches("^¿Qué nivel de reconocimiento tiene BBVA"),
+         emotion = matches("^¿Cómo es la emoción que genera la marca BBVA"),
+         differentiation = matches("^¿Qué opinas sobre la diferenciación de BBVA"),
+         brand_image = matches("^¿Qué opinas de la imagen de marca de BBVA")
+  ) |>
+  pivot_longer(
+    cols = c(awareness, emotion, differentiation, brand_image),
+    names_to = "response_type",
+    values_to = "response"
+  ) |> 
+  mutate(brand = "BBVA") |>
+  select(respondent_id, brand, response_type, response, awareness_audio, main_audio)
+
+
+```
+
+```{r}
+caixa_long <- raw1 |> 
+  filter(bank == "CaixaBank") |> 
+  drop_na(matches("^La marca de banco que se te ha asignado es: CaixaBank")) |> 
+  select(respondent_id, bank,
+         awareness_audio = "Por favor, graba un audio de 10 segundos (y súbelo aquí) respondiendo a la siguiente pregunta:\n\n¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?...15" ,
+         main_audio = matches("^La marca de banco que se te ha asignado es: CaixaBank"),
+         awareness = matches("^¿Qué nivel de reconocimiento tiene CaixaBank"),
+         emotion = matches("^¿Cómo es la emoción que genera la marca CaixaBank"),
+         differentiation = matches("^¿Qué opinas sobre la diferenciación de CaixaBank"),
+         brand_image = matches("^Finalmente, ¿qué opinas de la imagen de marca de CaixaBank?")
+  ) |>
+  pivot_longer(
+    cols = c(awareness, emotion, differentiation, brand_image),
+    names_to = "response_type",
+    values_to = "response"
+  ) |> 
+  mutate(brand = "CaixaBank") |>
+  select(respondent_id, brand, response_type, response, awareness_audio, main_audio)
+
+
+```
+
+```{r}
+tidy <- bind_rows(bbva_long, caixa_long)
+tidy_survey_data <- raw1 |> 
+  select(1:8) |> 
+  inner_join(tidy, by = "respondent_id")
+```
+
+### Download the audios in bulk
