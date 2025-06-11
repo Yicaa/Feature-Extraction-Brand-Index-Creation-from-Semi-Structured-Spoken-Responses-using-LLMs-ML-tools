@@ -1,5 +1,5 @@
 ---
-title: "TFM - Classification of semi-structered answers in audio"
+title: "TFM - Classification of semi-structured answers in audio"
 author: "Yijia Lin, supervised by Francisco Javier Nogales Martín"
 date: "`r Sys.Date()`"
 output: 
@@ -16,9 +16,10 @@ editor_options:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+reticulate::use_python("/Users/linyijia/whisper310_env/bin/python", required = TRUE)
 ```
 
-## Prerequisites
+## Prerequisites & Packages
 
 To run the audio transcription and classification pipeline, the
 following tools and libraries must be installed:
@@ -28,7 +29,9 @@ following tools and libraries must be installed:
 Install using:
 
 ```{bash}
-brew install ffmpeg  # if the computer is MacOS
+#In Terminal (not Rmd), already done:
+# brew install ffmpeg  
+# if the computer is MacOS
 ```
 
 FFmpeg is a command-line tool for processing audio and video files. It
@@ -46,14 +49,82 @@ available system-wide on macOS.
 This notebook will be using both R and Python languages, so it's
 important to make sure the R studio and Python 3 are installed.
 
+These steps below are intended to ensure that Python 3.10 and the
+required development libraries (e.g., zlib, llvm) are properly
+installed. Creating a dedicated Python virtual environment
+whisper310_env ensures that the packages used for Whisper will not
+conflict with other Python environments on your system.
+
+```{bash}
+#In Terminal (not Rmd), already done:
+# brew install zlib llvm
+# python3.10 -m venv ~/whisper310_env
+# source ~/whisper310_env/bin/activate
+```
+
 <br>
 
-3.  **Python Libraries**
+3.  **R Libraries**
+
+Install using:
+
+```{r, message=FALSE, warning=FALSE}
+#install.packages("reticulate")
+library(reticulate)
+library(tidyverse)
+library(readxl)
+library(conflicted)
+library(stringr)
+#install.packages("googledrive")
+library(googledrive)
+library(patchwork)
+library(ggrepel)
+library(extrafont)
+
+#avoid conflicts in packages
+conflicted::conflict_prefer("filter", "dplyr")
+conflicted::conflict_prefer("select", "dplyr")
+```
+
+<br>
+
+4.  **Python Libraries**
+
+On macOS, especially Apple Silicon (M1/M2/M3), Whisper depends on
+several low-level dynamic libraries (e.g., zlib, libc++, libunwind) for
+numerical computations. These libraries are not installed or linked by
+default for R + Python interoperability. If dynamic linking errors occur
+(e.g., Library not loaded), you may need to manually copy these
+libraries into R’s library search path like I did as shown below.
+
+```{bash}
+# No need to manually set environment variables (LDFLAGS, CPPFLAGS, DYLD_LIBRARY_PATH), unless you encounter dynamic library errors. In that case, please contact the author for troubleshooting.
+
+# sudo cp /opt/homebrew/opt/llvm/lib/c++/libc++.1.dylib /Library/Frameworks/R.framework/Resources/lib/
+# sudo cp /opt/homebrew/opt/zlib/lib/libz.1.dylib /Library/Frameworks/R.framework/Resources/lib/
+# sudo cp /opt/homebrew/opt/llvm/lib/c++/libc++abi.1.dylib /Library/Frameworks/R.framework/Resources/lib/
+# sudo cp /opt/homebrew/Cellar/llvm/20.1.6/lib/unwind/libunwind.1.dylib /Library/Frameworks/R.framework/Resources/lib/
+
+
+```
+
+```{r}
+# No need to manually set environment variables (LDFLAGS, CPPFLAGS, DYLD_LIBRARY_PATH), unless you encounter dynamic library errors. In that case, please contact the author for troubleshooting.
+
+# Sys.getenv("DYLD_LIBRARY_PATH")
+# Sys.setenv(
+#   LDFLAGS="-L/opt/homebrew/opt/zlib/lib -L/opt/homebrew/opt/llvm/lib",
+#   CPPFLAGS="-I/opt/homebrew/opt/zlib/include -I/opt/homebrew/opt/llvm/include",
+#   PATH="/opt/homebrew/opt/llvm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# )
+```
 
 Install using:
 
 ```{bash}
-pip3 install openai-whisper openai pandas openai
+#In Terminal (not Rmd), already done:
+# pip install --upgrade pip
+# pip install openai-whisper pandas ffmpeg-python
 ```
 
 These libraries serve the following purposes:
@@ -67,23 +138,12 @@ classify open-ended responses.
 **pandas**: A data analysis library used for reading Excel files,
 applying classification functions row-by-row, and exporting results.
 
-<br>
+Now, we connect the r studio with the virtual python environment by
+using `reticulate`:
 
-4.  **R Libraries**
-
-Install using:
-
-```{r}
-#install.packages("reticulate")
-library(reticulate)
-library(tidyverse)
-library(readxl)
-library(conflicted)
-library(stringr)
-
-#avoid conflicts in packages
-conflicted::conflict_prefer("filter", "dplyr")
-conflicted::conflict_prefer("select", "dplyr")
+```{r, message=FALSE, warning=FALSE, cache=TRUE}
+reticulate::use_virtualenv("~/whisper310_env", required = TRUE)
+py_config()
 ```
 
 <br>
@@ -92,8 +152,8 @@ conflicted::conflict_prefer("select", "dplyr")
 
 ### Read the data
 
-```{r}
-raw <- read_excel("raw data/Survey data.xlsx")
+```{r, message=FALSE, warning=FALSE}
+raw <- read_excel("data/raw data/Survey data.xlsx")
 ```
 
 ### Tidy and clean the data
@@ -127,6 +187,10 @@ joining them into the main table:
 
 ```{r}
 raw1 <- raw1 |> 
+  filter(if_any(
+    .cols = matches("^La marca de banco que se te ha asignado es: (BBVA|CaixaBank)"),
+    ~ !is.na(.)
+  )) |> 
   mutate(respondent_id = row_number()) |> #Create respondent ID for later joint
   relocate(respondent_id, .after = "Marca temporal")
 ```
@@ -134,7 +198,6 @@ raw1 <- raw1 |>
 ```{r}
 bbva_long <- raw1 |> 
   filter(bank == "BBVA") |> 
-  drop_na(matches("^La marca de banco que se te ha asignado es: BBVA")) |> 
   select(respondent_id, bank,
          awareness_audio = "Por favor, graba un audio de 10 segundos (y súbelo aquí) respondiendo a la siguiente pregunta:\n\n¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?...9"    ,
          main_audio = matches("^La marca de banco que se te ha asignado es: BBVA"),
@@ -143,13 +206,14 @@ bbva_long <- raw1 |>
          differentiation = matches("^¿Qué opinas sobre la diferenciación de BBVA"),
          brand_image = matches("^¿Qué opinas de la imagen de marca de BBVA")
   ) |>
-  pivot_longer(
-    cols = c(awareness, emotion, differentiation, brand_image),
-    names_to = "response_type",
-    values_to = "response"
-  ) |> 
+  # pivot_longer(
+  #   cols = c(awareness, emotion, differentiation, brand_image),
+  #   names_to = "response_type",
+  #   values_to = "response"
+  # ) |> 
   mutate(brand = "BBVA") |>
-  select(respondent_id, brand, response_type, response, awareness_audio, main_audio)
+  #select(respondent_id, brand, response_type, response, awareness_audio, main_audio)
+  select(respondent_id, brand,  awareness, emotion, differentiation,brand_image, awareness_audio, main_audio)
 
 
 ```
@@ -157,7 +221,6 @@ bbva_long <- raw1 |>
 ```{r}
 caixa_long <- raw1 |> 
   filter(bank == "CaixaBank") |> 
-  drop_na(matches("^La marca de banco que se te ha asignado es: CaixaBank")) |> 
   select(respondent_id, bank,
          awareness_audio = "Por favor, graba un audio de 10 segundos (y súbelo aquí) respondiendo a la siguiente pregunta:\n\n¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?...15" ,
          main_audio = matches("^La marca de banco que se te ha asignado es: CaixaBank"),
@@ -166,14 +229,14 @@ caixa_long <- raw1 |>
          differentiation = matches("^¿Qué opinas sobre la diferenciación de CaixaBank"),
          brand_image = matches("^Finalmente, ¿qué opinas de la imagen de marca de CaixaBank?")
   ) |>
-  pivot_longer(
-    cols = c(awareness, emotion, differentiation, brand_image),
-    names_to = "response_type",
-    values_to = "response"
-  ) |> 
+  # pivot_longer(
+  #   cols = c(awareness, emotion, differentiation, brand_image),
+  #   names_to = "response_type",
+  #   values_to = "response"
+  # ) |> 
   mutate(brand = "CaixaBank") |>
-  select(respondent_id, brand, response_type, response, awareness_audio, main_audio)
-
+  #select(respondent_id, brand, response_type, response, awareness_audio, main_audio)
+    select(respondent_id, brand,  awareness, emotion, differentiation,brand_image, awareness_audio, main_audio)
 
 ```
 
@@ -181,7 +244,428 @@ caixa_long <- raw1 |>
 tidy <- bind_rows(bbva_long, caixa_long)
 tidy_survey_data <- raw1 |> 
   select(1:8) |> 
-  inner_join(tidy, by = "respondent_id")
+  inner_join(tidy, by = "respondent_id") 
 ```
 
 ### Download the audios in bulk
+
+To download the audios in bulk, a Google authorization of my personal
+account is required as the audios should be private and only accessible
+to me.
+
+```{r, cache=TRUE}
+#drive_auth()
+```
+
+Then I prepare the list of links for downloading:
+
+```{r, cache=TRUE}
+awareness_audio<- unique(tidy_survey_data$awareness_audio)
+main_audio<- unique(tidy_survey_data$main_audio)
+```
+
+Now, I download the audios and save them with ids in 2 different folders
+according to the type of the audio:
+
+```{r, message=FALSE, cache=TRUE}
+# dir.create(file.path("data", "awareness_audio"), showWarnings = FALSE)
+# dir.create(file.path("data", "main_audio"), showWarnings = FALSE)
+# 
+# for (i in seq_along(main_audio)) {
+#   file_url <- main_audio[i]
+#   try({
+#     drive_file <- drive_get(as_id(file_url))
+#     
+#     # get the original file extension
+#     original_name <- drive_file$name
+#     ext <- tools::file_ext(original_name)
+#     
+#     # generate the final file path
+#     output_path <- file.path("data", "main_audio", paste0("audio_", i, ".", ext))
+#     
+#     # download the audio
+#     drive_download(drive_file, path = output_path, overwrite = TRUE)
+#   }, silent = TRUE)
+# }
+# 
+# for (i in seq_along(awareness_audio)) {
+#   file_url <- awareness_audio[i]
+#   try({
+#     drive_file <- drive_get(as_id(file_url))
+#     
+#     # get the original file extension
+#     original_name <- drive_file$name
+#     ext <- tools::file_ext(original_name)
+#     
+#     # generate the final file path
+#     output_path <- file.path("data", "awareness_audio", paste0("audio_", i, ".", ext))
+#     
+#     # download the audio
+#     drive_download(drive_file, path = output_path, overwrite = TRUE)
+#   }, silent = TRUE)
+# }
+```
+
+### Convert audios into text locally using OpenAI Whisper
+
+#### Make sure the audio formats are compatible with OpenAI Whisper
+
+Firstly, I need to convert some special formats of audios into formats
+which are compatibles with OpenAI Whisper.
+
+```{r, cache=TRUE}
+# Create a new folder for saving the converted audios
+# dir.create(file.path("data", "processed_main_audio"), showWarnings = FALSE)
+# dir.create(file.path("data", "processed_awareness_audio"), showWarnings = FALSE)
+```
+
+```{r, cache=TRUE, message=FALSE, warning=FALSE}
+# Set folder with original audio files
+input_folder <- "data/main_audio"  
+
+# Set folder where processed files will be saved
+output_folder <- "data/processed_main_audio"
+dir.create(output_folder, showWarnings = FALSE)
+
+# Get all file paths in the input folder
+files <- list.files(input_folder, full.names = TRUE)
+
+
+# Loop through each file
+for (f in files) {
+  # Get file extension (case-insensitive)
+  ext <- tools::file_ext(f)
+  
+  # Construct output file path (use .wav if converting)
+  base_name <- tools::file_path_sans_ext(basename(f))
+  
+  # If incompatible format (amr or mov), convert to .wav
+  if (tolower(ext) %in% c("amr", "mov")) {
+    output_file <- file.path(output_folder, paste0(base_name, ".wav"))
+    system(sprintf('ffmpeg -y -i "%s" "%s"', f, output_file))
+  } else {
+    # If compatible format, just copy the file as is
+    output_file <- file.path(output_folder, basename(f))
+    file.copy(f, output_file, overwrite = TRUE)
+  }
+}
+```
+
+```{r, message=FALSE, warning=FALSE, cache=TRUE}
+# # Repeat the same process
+# input_folder <- "data/awareness_audio"  
+# 
+# # Set folder where processed files will be saved
+# output_folder <- "data/processed_awareness_audio"
+# dir.create(output_folder, showWarnings = FALSE)
+# 
+# # Get all file paths in the input folder
+# files <- list.files(input_folder, full.names = TRUE)
+# 
+# 
+# # Loop through each file
+# for (f in files) {
+#   # Get file extension (case-insensitive)
+#   ext <- tools::file_ext(f)
+#   
+#   # Construct output file path (use .wav if converting)
+#   base_name <- tools::file_path_sans_ext(basename(f))
+#   
+#   # If incompatible format (amr or mov), convert to .wav
+#   if (tolower(ext) %in% c("amr", "mov")) {
+#     output_file <- file.path(output_folder, paste0(base_name, ".wav"))
+#     system(sprintf('ffmpeg -y -i "%s" "%s"', f, output_file))
+#   } else {
+#     # If compatible format, just copy the file as is
+#     output_file <- file.path(output_folder, basename(f))
+#     file.copy(f, output_file, overwrite = TRUE)
+#   }
+# }
+```
+
+#### Convert the audios
+
+```{python, cache=TRUE}
+# import ssl
+# ssl._create_default_https_context = ssl._create_unverified_context #solve certification problems, as here we are doing python in r studio
+# 
+# import whisper
+# model = whisper.load_model("large")
+# 
+# import os  
+# import pandas as pd
+# 
+# # Set the folder path that contains the audio files
+# AUDIO_FOLDER = "data/processed_main_audio"
+# 
+# 
+# # Supported audio formats (incompatible ones will be skipped)
+# AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".mp4", ".webm", ".ogg", ".flac"]
+# 
+# # List to store results: filename and its transcript
+# results = []
+# 
+# # Loop through all audio files in the folder
+# for filename in os.listdir(AUDIO_FOLDER):
+#     if any(filename.endswith(ext) for ext in AUDIO_EXTENSIONS):
+#         audio_path = os.path.join(AUDIO_FOLDER, filename)
+#         print(f"Transcribiendo: {filename}...")  
+# 
+#         # Transcribe audio to text with Whisper
+#         result = model.transcribe(audio_path, language="Spanish")
+#         transcript = result["text"]  # Get the transcribed text
+# 
+#         # Add result to list (filename + transcript)
+#         results.append({
+#             "file": filename,
+#             "transcript": transcript
+#         })
+# 
+# # Save all transcripts into a single CSV file for analysis or R
+# df = pd.DataFrame(results)
+# csv_path = os.path.join(AUDIO_FOLDER, "transcripts_main.csv")
+# df.to_csv(csv_path, index=False, encoding="utf-8")
+# 
+# print("¡Transcripción completada y guardada en transcripts.csv!")
+
+# Note:
+# If you see the warning:
+# "UserWarning: FP16 is not supported on CPU; using FP32 instead"
+# This is expected. Whisper automatically switches from half precision (FP16) to single precision (FP32) on CPU-only devices. It does not affect the transcription results but may slightly impact performance.
+```
+
+```{python, cache=TRUE, message=FALSE, warning=FALSE}
+# # Repeat the same processes for awareness audios
+# AUDIO_FOLDER = "data/processed_awareness_audio"
+# 
+# # Supported audio formats (incompatible ones will be skipped)
+# AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".mp4", ".webm", ".ogg", ".flac"]
+# 
+# # List to store results: filename and its transcript
+# results = []
+# 
+# # Loop through all audio files in the folder
+# for filename in os.listdir(AUDIO_FOLDER):
+#     if any(filename.endswith(ext) for ext in AUDIO_EXTENSIONS):
+#         audio_path = os.path.join(AUDIO_FOLDER, filename)
+#         print(f"Transcribiendo: {filename}...")  
+# 
+#         # Transcribe audio to text with Whisper
+#         result = model.transcribe(audio_path, language="Spanish")
+#         transcript = result["text"]  # Get the transcribed text
+# 
+#         # Add result to list (filename + transcript)
+#         results.append({
+#             "file": filename,
+#             "transcript": transcript
+#         })
+# 
+# # Save all transcripts into a single CSV file for analysis or R
+# df = pd.DataFrame(results)
+# csv_path = os.path.join(AUDIO_FOLDER, "transcripts_awareness.csv")
+# df.to_csv(csv_path, index=False, encoding="utf-8")
+# 
+# print("¡Transcripción completada y guardada en transcripts.csv!")
+```
+
+After converting the audios into texts (saved in csv format), now we
+read the csv files to access them in R studio:
+
+```{r, cache=TRUE}
+transcrip_main <- read.csv("data/processed_main_audio/transcripts_main.csv")
+transcrip_awareness <- read.csv("data/processed_awareness_audio/transcripts_awareness.csv")
+```
+
+### Join and clean the transcripts
+
+In case there are audios not conform to requirements, I'll do a further
+cleaning: filtering out the transcripts which contains less than 20
+words (as they're supposed to be 1 min long).
+
+```{r, cache=TRUE}
+transcript<- transcrip_main |> 
+  left_join(transcrip_awareness, by = "file") |> 
+  mutate(respondent_id= as.integer(sub("^audio_(\\d+)\\..*$", "\\1", file))) |> 
+  rename(awareness_audio=transcript.y,
+         main_audio=transcript.x) |> 
+  mutate(
+    clean_text = str_remove_all(main_audio, "[[:punct:]]"),  
+    word_count = str_count(clean_text, "\\S+")                
+  ) |> 
+  filter(word_count >= 20) |> 
+  select(respondent_id,awareness_audio,main_audio)
+```
+
+```{r, cache=TRUE}
+tidy_join_transcript <- tidy_survey_data |> 
+  select(-c("awareness_audio","main_audio")) |> 
+  inner_join(transcript, by = "respondent_id") |> 
+  rename(CCAA="¿En cuál de las siguientes Comunidades/Ciudades Autónomas vives?")
+```
+
+### Balance check
+
+I'll first check if the random assignation gave a fair split of
+observations for each of the banks:
+
+```{r, message=FALSE, warning=FALSE}
+#set the same theme for all plots later
+loadfonts(device = "pdf") #macOs
+my_theme <- theme_void() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 10, face = "bold", family = "Times New Roman"),
+    legend.text = element_text(size = 9, family = "Times New Roman"),
+    plot.title = element_text(
+      size = 12,
+      face = "bold",
+      hjust = 0.5,
+      family = "Times New Roman",
+      margin = margin(b = 10)
+    ),
+    plot.caption = element_text(
+      size = 8,
+      family = "Times New Roman",
+      hjust = 1,
+      color = "gray40"
+    ),
+    plot.margin = margin(t = 20, r = 40, b = 20, l = 40),
+    legend.box.margin = margin(l = 10),
+    text = element_text(family = "Times New Roman")
+  )
+
+# create the function to save the plots in the same format
+fig_dir <- "figures"
+if (!dir.exists(fig_dir)) {
+  dir.create(fig_dir)
+}
+
+save_my_plot <- function(p, filename) {
+  ggsave(file.path(fig_dir, filename),
+          plot = p, dpi = 600, width = 9, height = 5, units = "in")
+}
+```
+
+```{r brand balance, cache=TRUE}
+freq_bank <- tidy_join_transcript |> 
+  count(brand) |> 
+  mutate(
+    percent = n / sum(n),
+    label = scales::percent(percent, accuracy = 0.1)  
+  )
+
+
+p1<- ggplot(freq_bank, aes(x = "", y = percent, fill = brand)) +
+  geom_bar(stat = "identity", width = 1, color = "white", linewidth = 0.3) +
+  coord_polar("y", start = 0) +
+  ggrepel::geom_text_repel(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    size = 5,
+    color = "white",  
+    point.padding = 0.2,
+    min.segment.length = 0,  
+    segment.color = "gray30",
+    segment.size = 0.3,
+    show.legend = FALSE
+  ) +
+  labs(
+    title = "Distribution of Audios between BBVA and CaixaBank",
+    fill = "Bank Brand",
+    caption = "Source: Yijia's analysis"
+  ) +
+  scale_fill_manual(
+    values = c("#1f77b4", "#ff7f0e"),  
+    labels = function(x) tools::toTitleCase(tolower(x)) 
+  ) +
+  my_theme
+p1
+```
+
+```{r, cache=TRUE}
+save_my_plot(p1, "figure1_bank_distribution.png")
+```
+
+According to the pie plot, I have balanced observations for both brands
+(19 observations of each).
+
+Now, I would like to check the distribution among the social-economic
+variables, although the sample itself is not representative and then I
+didn't expect a very balanced sample.
+
+```{r socio-economic balance, cache=TRUE}
+create_pie_chart <- function(data, variable, title) {
+
+  freq_data <- data |> 
+    count({{variable}}) |> 
+    drop_na() |> 
+    mutate(
+      percent = n / sum(n),
+      label_raw = paste0(scales::percent(percent, accuracy = 1), "\n", as.character({{variable}}))
+    ) |> 
+    arrange(desc(percent)) |> 
+    mutate(label = ifelse(row_number() <= 3, label_raw, NA))  #only show labels for the top 3
+
+  ggplot(freq_data, aes(x = "", y = percent, fill = {{variable}})) +
+    geom_bar(stat = "identity", width = 1, color = "white") +
+    coord_polar("y", start = 0) +
+    geom_text(
+      aes(label = label),
+      position = position_stack(vjust = 0.5),
+      size = 2.5,
+      lineheight = 0.9,
+      color = "black",
+      show.legend = FALSE
+    ) +
+    labs(title = title) +
+    theme_void() +
+    theme(
+      plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+      plot.margin = margin(5, 5, 5, 5),
+      legend.position = "none"
+    )
+}
+
+
+
+p1 <- create_pie_chart(tidy_join_transcript, Sexo, "Sexo")
+p2 <- create_pie_chart(tidy_join_transcript, Edad, "Edad")
+p3 <- create_pie_chart(tidy_join_transcript, Estudios, "Estudios")
+p4 <- create_pie_chart(tidy_join_transcript, `Ingresos mensuales brutos del hogar`, "Ingresos del Hogar")
+p5 <- create_pie_chart(tidy_join_transcript, `Clase Social`, "Clase Social")
+p6 <- create_pie_chart(tidy_join_transcript, CCAA, "CCAA")
+
+
+combined_plot <- (p1 + p2 + p3) / (p4 + p5 + p6) +
+  plot_annotation(
+    title = "Socialeconomic Variables Balance Check",
+    theme = theme(
+      plot.title = element_text(
+        size = 14,
+        face = "bold",
+        hjust = 0.5,
+        family = "Times New Roman",
+        margin = margin(b = 10)
+      )
+    )
+  )
+
+
+combined_plot
+```
+
+```{r, cache=TRUE}
+save_my_plot(combined_plot,"figure2_socialeconomic_variables_balance_check.png")
+```
+
+It's observed that only sexes are more or less balanced (58% male \~ 42%
+female), but for other variables, it's not balanced: most respondents of
+this survey have an age of 18-27 years old, they've been educated in
+universities, the monthly house income is typically less than 2000€,
+most belongs to medium social class, and live in Madrid.
+
+However, the inblance in the sample doesn't matter in this research, as
+I only try to investigate the accuracy of this methodology itself but
+not intend to generalized the conclusions.
+
+<br>
