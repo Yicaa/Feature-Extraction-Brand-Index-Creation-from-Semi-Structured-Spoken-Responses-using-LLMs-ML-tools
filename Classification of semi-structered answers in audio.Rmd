@@ -80,6 +80,12 @@ library(googledrive)
 library(patchwork)
 library(ggrepel)
 library(extrafont)
+library(stringdist)
+library(tidytext)
+library(readr)
+library(scales)
+library(xml2)
+library(spacyr)
 
 #avoid conflicts in packages
 conflicted::conflict_prefer("filter", "dplyr")
@@ -202,18 +208,12 @@ bbva_long <- raw1 |>
          awareness_audio = "Por favor, graba un audio de 10 segundos (y súbelo aquí) respondiendo a la siguiente pregunta:\n\n¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?...9"    ,
          main_audio = matches("^La marca de banco que se te ha asignado es: BBVA"),
          awareness = matches("^¿Qué nivel de reconocimiento tiene BBVA"),
-         emotion = matches("^¿Cómo es la emoción que genera la marca BBVA"),
+         sentiment = matches("^¿Cómo es la emoción que genera la marca BBVA"),
          differentiation = matches("^¿Qué opinas sobre la diferenciación de BBVA"),
          brand_image = matches("^¿Qué opinas de la imagen de marca de BBVA")
   ) |>
-  # pivot_longer(
-  #   cols = c(awareness, emotion, differentiation, brand_image),
-  #   names_to = "response_type",
-  #   values_to = "response"
-  # ) |> 
   mutate(brand = "BBVA") |>
-  #select(respondent_id, brand, response_type, response, awareness_audio, main_audio)
-  select(respondent_id, brand,  awareness, emotion, differentiation,brand_image, awareness_audio, main_audio)
+  select(respondent_id, brand,  awareness, sentiment, differentiation,brand_image, awareness_audio, main_audio)
 
 
 ```
@@ -225,18 +225,12 @@ caixa_long <- raw1 |>
          awareness_audio = "Por favor, graba un audio de 10 segundos (y súbelo aquí) respondiendo a la siguiente pregunta:\n\n¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?...15" ,
          main_audio = matches("^La marca de banco que se te ha asignado es: CaixaBank"),
          awareness = matches("^¿Qué nivel de reconocimiento tiene CaixaBank"),
-         emotion = matches("^¿Cómo es la emoción que genera la marca CaixaBank"),
+         sentiment = matches("^¿Cómo es la emoción que genera la marca CaixaBank"),
          differentiation = matches("^¿Qué opinas sobre la diferenciación de CaixaBank"),
          brand_image = matches("^Finalmente, ¿qué opinas de la imagen de marca de CaixaBank?")
   ) |>
-  # pivot_longer(
-  #   cols = c(awareness, emotion, differentiation, brand_image),
-  #   names_to = "response_type",
-  #   values_to = "response"
-  # ) |> 
   mutate(brand = "CaixaBank") |>
-  #select(respondent_id, brand, response_type, response, awareness_audio, main_audio)
-    select(respondent_id, brand,  awareness, emotion, differentiation,brand_image, awareness_audio, main_audio)
+  select(respondent_id, brand,  awareness, sentiment, differentiation,brand_image, awareness_audio, main_audio)
 
 ```
 
@@ -555,7 +549,7 @@ freq_bank <- tidy_join_transcript |>
   )
 
 
-p1<- ggplot(freq_bank, aes(x = "", y = percent, fill = brand)) +
+p1 <- ggplot(freq_bank, aes(x = "", y = percent, fill = brand)) +
   geom_bar(stat = "identity", width = 1, color = "white", linewidth = 0.3) +
   coord_polar("y", start = 0) +
   ggrepel::geom_text_repel(
@@ -578,7 +572,16 @@ p1<- ggplot(freq_bank, aes(x = "", y = percent, fill = brand)) +
     values = c("#1f77b4", "#ff7f0e"),  
     labels = function(x) tools::toTitleCase(tolower(x)) 
   ) +
-  my_theme
+  my_theme +
+  theme(
+    plot.caption = element_text(
+      size = 9,
+      hjust = 1,
+      family = "Times New Roman",
+      face = "italic",
+      margin = margin(t = 10)
+    )
+  )
 p1
 ```
 
@@ -639,6 +642,7 @@ p6 <- create_pie_chart(tidy_join_transcript, CCAA, "CCAA")
 combined_plot <- (p1 + p2 + p3) / (p4 + p5 + p6) +
   plot_annotation(
     title = "Socialeconomic Variables Balance Check",
+    caption = "Source: Yijia's analysis",
     theme = theme(
       plot.title = element_text(
         size = 14,
@@ -646,6 +650,13 @@ combined_plot <- (p1 + p2 + p3) / (p4 + p5 + p6) +
         hjust = 0.5,
         family = "Times New Roman",
         margin = margin(b = 10)
+      ),
+      plot.caption = element_text(        
+        size = 9,
+        hjust = 1,
+        family = "Times New Roman",
+        face = "italic",
+        margin = margin(t = 10)
       )
     )
   )
@@ -669,3 +680,500 @@ I only try to investigate the accuracy of this methodology itself but
 not intend to generalized the conclusions.
 
 <br>
+
+## Baseline model: Text Mining + BERT
+
+Before introducing LLMs to generate the indexes, I'll firstly try to
+create a baseline model for each of these indexes by text mining tools
+and BERT, with the purpose of setting a minimum expectation of accuracy
+for LLM models.
+
+### Awareness index
+
+```{r, cache=TRUE}
+# create a brand dictionary（as Whisper usually makes mistakes especially while detecting brand names）
+bank_aliases <- list(
+  "BBVA" = c("BBVA", "BVA", "PPVA", "BVBA", "VVA"),
+  "CaixaBank" = c("CaixaBank", "CaxaBank", "Cajabank", "Caixabán", "La Caixa", "la caixa", "Caixa", "La caixa", "La CaixaBank"),
+  "Santander" = c("Santander", "Sandander", "Sanander", "San Ander", "Banco Santander", "Banc Santander"),
+  "Sabadell" = c("Sabadell", "Banco Sabadell", "Sabadel", "Savadell"),
+  "Ibercaja" = c("Ibercaja", "Hipercaja", "Vercaja"),
+  "ING" = c("ING", "ING Direct", "ING Directa"),
+  "Revolut" = c("Revolut"),
+  "Openbank" = c("Open Bank", "Openbank"),
+  "Unicaja" = c("Unicaja"),
+  "Liberbank" = c("LiberBank", "Liberbank"),
+  "Caja Rural" = c("Caja Rural"),
+  "Imagine" = c("Imagine"),
+  "Deutsche Bank" = c("Deutsche Bank"),
+  "Evo" = c("Evo"),
+  "Trade Republic" = c("Trade Republic"),
+  "NG" = c("NG", "NG Direct", "NG."),
+  "Cajamar" = c("Cajamar"),
+  "Caixa Popular" = c("Caixa Popular"),
+  "Banco Mars" = c("Banco Mars"),
+  "Bankinter" = c("Bankinter", "Van Ginder", "Banquinter", "Bunkinter", "Bank inter")
+)
+```
+
+```{r, cache=TRUE}
+# clean the sentences which repeat the question
+# to detect correctly 
+clean_awareness_text <- function(text) {
+  gsub(
+    pattern = "(?i)(los bancos que más.*?(son|serían|pueden ser|diría que|han sido|yo creo que|suelo escuchar|en mi día a día)[,\\s]*)",
+    replacement = "",
+    x = text,
+    perl = TRUE
+  )
+}
+
+# create the function to generate the Awareness Index（1–7）
+compute_awareness_score_scaled <- function(text, assigned_bank, bank_aliases) {
+  if (is.na(text) || is.na(assigned_bank)) return(NA)
+
+  # Step 1: clean the sentences
+  cleaned_text <- clean_awareness_text(text)
+
+  # Step 2: tokenization
+  tokens <- unlist(strsplit(cleaned_text, ",|\\s+"))
+  tokens <- tolower(trimws(tokens))
+
+  # Step 3: fuzzy assignation of brands
+  aliases <- tolower(bank_aliases[[assigned_bank]])
+  match_scores <- sapply(tokens, function(tok) {
+    min(stringdist(tok, aliases, method = "jw"))
+  })
+
+  threshold <- 0.2
+  hit_positions <- which(match_scores < threshold)
+
+  # Step 4: 1 for not mentioning the assigned brand
+  if (length(hit_positions) == 0) return(1)
+
+  # Step 5: find the firstly mentioned brand (and the first 5)
+  pos <- hit_positions[1]
+  if (pos > 5) pos <- 5
+
+  # Step 6: scaling to 1-7（pos 1–5 → 1–7）
+  raw_score <- max(0, 1 - 0.2 * (pos - 1))  # e.g. 1.0 → 0.8 → ... → 0.2
+  scaled_score <- 1 + 6 * raw_score        # scaling to 1–7
+  return(round(scaled_score))              # round the number to integers in the Likert scale
+}
+```
+
+```{r, cache=TRUE}
+tidy_join_transcript1 <- tidy_join_transcript  |> 
+  rowwise()  |> 
+  mutate(
+    awareness_index_base = compute_awareness_score_scaled(
+      awareness_audio,
+      brand,
+      bank_aliases
+    )
+  )  |> 
+  ungroup()  
+```
+
+### Sentiment index
+
+I'll use text mining tools to conduct the sentiment analysis, but first
+of all, I need to download a Spanish sentiment lexicon as R libraries
+doesn't have it in Spanish. The lexicon dictionary I use is from
+IULA-UPF ([Institut de Lingüística Aplicada -
+Barcelona](https://www.upf.edu/web/iula)), and the link to download the
+lexicon is
+<https://github.com/ITALIC-US/ML-Senticon/blob/main/senticon.es.xml>.
+
+```{r, cache=TRUE}
+xml_file <- read_xml("data/lexicons/senticon.es.xml")
+lemmas <- xml_find_all(xml_file, ".//lemma")
+senticon_es <- map_dfr(lemmas, function(node) {
+  word <- xml_text(node) %>% str_trim()
+  polarity <- xml_attr(node, "pol") %>% as.numeric()
+
+  tibble(word = str_to_lower(word), polarity = polarity)
+}) %>%
+  filter(!is.na(polarity)) %>%
+  distinct(word, .keep_all = TRUE)
+```
+
+I'll use `spacyr` to tokenize and lemmatize the transcripts (main audio)
+in Spanish:
+
+```{bash}
+# pip install spacy
+# python -m spacy download es_core_news_md
+```
+
+```{r}
+if (!dir.exists("data/intermediate")) dir.create("data/intermediate", recursive = TRUE)
+readr::write_csv(tidy_join_transcript1, "data/intermediate/tidy_join_transcript1.csv")
+```
+
+```{python, cache=TRUE}
+import spacy
+import pandas as pd
+
+# model the Spanish model
+nlp = spacy.load("es_core_news_md")
+
+
+df = pd.read_csv("data/intermediate/tidy_join_transcript1.csv")
+
+results = []
+
+for idx, row in df.iterrows():
+    respondent_id = row["respondent_id"]
+    doc = nlp(str(row["main_audio"]))
+    for token in doc:
+        if not token.is_punct and not token.is_space:
+            results.append({
+                "respondent_id": respondent_id,
+                "lemma": token.lemma_.lower()
+            })
+
+# save as dataframe
+lemmas_df = pd.DataFrame(results)
+lemmas_df.to_csv("data/intermediate/lemmas.csv", index=False)
+```
+
+Then, I apply the lexicons dictionary to the transcripts by
+`inner_join`:
+
+```{r, cache=TRUE}
+tokens_lemma <- readr::read_csv("data/intermediate/lemmas.csv")
+sentiment_scores <- tokens_lemma %>%
+  inner_join(senticon_es, by = c("lemma" = "word")) %>%
+  group_by(respondent_id) %>%
+  summarise(sentiment_raw = mean(polarity, na.rm = TRUE)) %>%
+  mutate(sentiment_index = round(scales::rescale(sentiment_raw, to = c(1, 7))))
+
+```
+
+Finally, I join the sentiment scores to the original tibble.
+
+```{r, cache=TRUE}
+tidy_join_transcript2 <- tidy_join_transcript1 |> 
+  left_join(sentiment_scores, by="respondent_id") |> 
+  select(-"sentiment_raw") |> 
+  rename(sentiment_index_base=sentiment_index)
+```
+
+### Differentiation index
+
+To compute the Differentiation Index, I employed a semantic similarity
+approach using a multilingual BERT model. As reference prompts, I
+designed a set of short, general-purpose sentences that semantically
+express the concept of brand distinctiveness without assuming any
+specific source of differentiation (e.g., technology, customer focus,
+pricing). This design choice ensures compatibility with a wide range of
+respondent expressions while maintaining methodological neutrality.
+Example prompts include: “Este banco es diferente a los demás.”, “Tiene
+algo único que lo distingue del resto.”, and “No es un banco
+convencional.” These prompts were embedded using Sentence-BERT and used
+to compute cosine similarity with each respondent’s free-form
+description of the assigned brand.
+
+Firstly, I install the `sentence-transformers` python package.
+
+```{bash, cache=TRUE}
+# pip install sentence-transformers
+```
+
+Then, I prepared the input and the prompts for the BERT model:
+
+```{r, cache=TRUE}
+readr::write_csv(tidy_join_transcript2, "data/intermediate/tidy_join_transcript2.csv")
+```
+
+```{python, eval=FALSE, echo=TRUE}
+# # bert_differentiation.py
+# 
+# from sentence_transformers import SentenceTransformer, util
+# import pandas as pd
+# import numpy as np
+# 
+# # 1. Load the input CSV from R
+# df = pd.read_csv("data/intermediate/tidy_join_transcript2.csv")  # adapt path if needed
+# texts = df["main_audio"].astype(str).tolist()
+# 
+# # 2. Define general-purpose differentiation prompts (in Spanish)
+# prompts = [
+#     "Este banco es diferente a los demás.",
+#     "Tiene algo único que lo distingue del resto.",
+#     "Se nota que no es como otros bancos.",
+#     "Ofrece una propuesta distinta a lo habitual.",
+#     "No es un banco convencional.",
+#     "Tiene una manera propia de hacer las cosas.",
+#     "Es claramente un banco con enfoque diferente."
+# ]
+# 
+# # 3. Load the multilingual BERT model
+# model = SentenceTransformer("distiluse-base-multilingual-cased-v2")
+# 
+# # 4. Encode texts and prompts
+# text_embeddings = model.encode(texts, convert_to_tensor=True)
+# prompt_embeddings = model.encode(prompts, convert_to_tensor=True)
+# 
+# # 5. Compute cosine similarity
+# similarity_matrix = util.cos_sim(text_embeddings, prompt_embeddings).cpu().numpy()
+# 
+# # 6. Take the maximum similarity score for each respondent
+# max_similarities = np.max(similarity_matrix, axis=1)
+# 
+# # 7. Rescale to 1–7 differentiation index
+# scaled_scores = 1 + 6 * (max_similarities - np.min(max_similarities)) / (np.max(max_similarities) - np.min(max_similarities))
+# df["differentiation_index"] = np.round(scaled_scores)
+# 
+# # 8. Save output for R
+# df[["respondent_id", "differentiation_index"]].to_csv("data/intermediate/differentiation_index.csv", index=False)
+# 
+# print("✅ Differentiation index saved to data/intermediate/differentiation_index.csv")
+```
+
+As this model is computationally costly, and the R studio burnt out
+several times while runing the codes above, I will not run this part of
+Python code here, but to save it as .py and run it in the Terminal:
+
+```{bash}
+# conda create -n tfm-bert python=3.10
+# conda activate tfm-bert
+# pip install sentence-transformers pandas numpy
+# cd ~/Desktop/MCSC/TFM/Project/Feature-Extraction-and-Brand-Index-Creation-from-Semi-Structured-Spoken-Responses-using-LLMs-and-ML-tools
+# python data/intermediate/bert_differentiation.py
+```
+
+```{r, cache=TRUE}
+# Join the scores to the main tibble
+diff_scores <- readr::read_csv("data/intermediate/differentiation_index.csv")
+
+tidy_join_transcript3 <- tidy_join_transcript2 %>%
+  left_join(diff_scores, by = "respondent_id") |> 
+  rename(differentiation_index_base=differentiation_index)
+
+readr::write_csv(tidy_join_transcript3, "data/intermediate/tidy_join_transcript3.csv")
+```
+
+### Performance evaluation
+
+To evaluate the performance of the proposed index predictions—derived
+from both rule-based methods and LLM prompt outputs—against
+human-annotated scores on a 1–7 Likert scale, we selected **three
+complementary evaluation metrics**: **Mean Absolute Error (MAE)**,
+**Spearman’s rank correlation coefficient (ρ)**, and **1-off Accuracy**.
+Each metric captures a different and relevant dimension of prediction
+quality in the context of ordinal, human-rated scores.
+
+**1. Mean Absolute Error (MAE)**
+
+MAE was chosen as the **primary metric for measuring prediction
+accuracy**. It quantifies the average absolute deviation between model
+predictions and human ratings.
+
+This metric is:
+
+-   **Scale-aware**, making it suitable for Likert-type ratings (1–7);
+
+-   **Interpretation-friendly**, as it reflects how many points the
+    model typically deviates from the ground truth;
+
+-   **Robust to outliers** compared to squared-error metrics such as
+    MSE, which are less appropriate for short, bounded rating scales.
+
+Given the limited sample size (n = 29), MAE provides a **stable and
+intuitive measure of absolute prediction quality**.
+
+**2. Spearman’s Rank Correlation Coefficient (ρ)**
+
+Spearman’s ρ was selected to assess the **ordinal consistency** between
+predicted scores and human annotations. As a non-parametric rank-based
+metric, it evaluates whether the predicted scores preserve the
+**relative ordering** of responses, independent of their exact values.
+
+This is especially relevant because:
+
+-   Likert scales are **ordinal by nature**, and rank alignment may
+    matter more than exact numerical matching;
+
+-   It is **less sensitive to score compression or skew**—common in
+    subjective human ratings;
+
+-   It is particularly **appropriate for small samples**, where
+    assumptions of linearity or normality (required by Pearson’s r) may
+    not hold.
+
+Thus, Spearman ρ serves as a complementary metric to MAE, providing
+insights into **directional alignment** between models and humans.
+
+**3. 1-off Accuracy**
+
+This metric captures the **practical tolerance** of the prediction task
+by measuring the proportion of predictions that fall within ±1 point of
+the true human rating.
+
+Its inclusion reflects:
+
+-   The **realistic fuzziness** inherent in subjective annotations;
+
+-   The fact that a predicted 5 vs an annotated 6 is **not a critical
+    error** in most qualitative applications;
+
+-   The need to quantify the model’s **"acceptable correctness"** beyond
+    rigid exact-match accuracy.
+
+1-off Accuracy offers an interpretable, **task-relevant performance
+measure**, especially for user-perception data where perfect alignment
+is neither expected nor necessary.
+
+```{r, cache=TRUE}
+
+# Create a function to standarize the evaluation
+evaluate_model <- function(pred, truth) {
+  mae <- mean(abs(pred - truth), na.rm = TRUE)
+  spearman <- suppressWarnings(cor(pred, truth, method = "spearman", use = "pairwise.complete.obs"))
+  one_off <- mean(abs(pred - truth) <= 1, na.rm = TRUE)
+
+  return(c(
+    MAE = round(mae, 3),
+    Spearman = round(spearman, 3),
+    OneOffAcc = round(one_off * 100, 1)  
+  ))
+}
+
+results_base <- tibble::tibble(
+  Index = character(),
+  MAE = numeric(),
+  Spearman = numeric(),
+  OneOffAcc = numeric()
+)
+
+indexes <- c("awareness", "sentiment", "differentiation")
+
+# go through all indexes, and find their _index_base 
+for (ix in indexes) {
+  pred_col <- paste0(ix, "_index_base")
+  truth_col <- ix  
+  
+  eval_result <- evaluate_model(tidy_join_transcript3[[pred_col]], tidy_join_transcript3[[truth_col]])
+  
+  results_base <- dplyr::add_row(results_base, Index = ix, !!!as.list(eval_result))
+}
+
+print(results_base)
+
+```
+
+The performance of the baseline models across the three brand perception
+dimensions is limited:
+
+-   **Awareness**:\
+    High prediction error (MAE = 2.90), weak rank correlation (ρ =
+    0.21), and very low 1-off accuracy (31.6%) suggest poor alignment
+    with human ratings. The rule-based method likely lacks precision in
+    detecting brand mentions and ordering relevance.
+
+-   **Sentiment**:
+    Moderate performance (MAE = 1.37, ρ = 0.17, 1-off = 60.5%). While
+    not highly accurate, this model captures some degree of emotional
+    polarity and could serve as a viable baseline for future LLM
+    comparisons.
+
+-   **Differentiation**:\
+    Poor performance, with negative rank correlation (ρ = –0.51) and
+    high MAE (1.90). This suggests that the semantic similarity method
+    used in the BERT-based baseline may not effectively capture
+    perceived brand uniqueness.
+
+> Among the three dimensions, only the sentiment baseline shows
+> marginally acceptable performance. Awareness and differentiation
+> models will likely require redesign or replacement using more robust
+> methods (e.g. LLMs or hybrid pipelines).
+
+## Selection of LLM for Evaluation
+
+In order to evaluate the effectiveness of automatic analysis on
+Spanish-language audio transcriptions, we selected three distinct Large
+Language Models (LLMs) based on their current performance in academic
+benchmarks, multilingual capabilities, cost-efficiency, and
+architectural diversity. The selection is grounded in recent comparative
+research and official technical documentation.
+
+First, **GPT-4o**, developed by OpenAI, was chosen as the primary model.
+It has consistently ranked at the top of evaluations such as the Chatbot
+Arena and the MT-Bench for its superior capabilities in complex
+reasoning, structured output, and instruction following. Most notably,
+it demonstrates strong multilingual performance, including for Spanish,
+as reported in the GPT-4o System Card published by OpenAI (2024).
+Moreover, recent studies indicate that GPT-4o displays notable
+robustness to prompt variation, minimizing the need for excessive prompt
+engineering in practical applications (Zhao et al., 2023). These
+attributes make GPT-4o a strong candidate for our baseline model.
+
+To introduce architectural diversity and cross-validation, we also
+included **Claude 3 Sonnet**, developed by Anthropic. This model has
+emerged as a serious contender to GPT-4o, with highly competitive
+results in structured response generation tasks. It is particularly
+suited for evaluations requiring consistent JSON-formatted outputs, a
+core requirement in this research. Furthermore, Claude 3 Sonnet offers a
+balanced trade-off between quality and cost, making it especially
+suitable for batch processing in research environments. Technical
+documentation from Anthropic (2024) affirms its capabilities in both
+English and Spanish, supporting its relevance to our multilingual
+dataset.
+
+The third model incorporated into the evaluation is **Mistral 7B**, a
+leading open-source alternative. Despite its smaller size, Mistral 7B
+has outperformed earlier open-source models such as LLaMA 2 in zero-shot
+and few-shot benchmarks. Running this model locally not only ensures
+cost control—eliminating per-token API expenses—but also enhances
+transparency and reproducibility. Including Mistral 7B also allows us to
+investigate whether closed-source commercial models consistently
+outperform open alternatives in tasks involving informal spoken Spanish,
+a consideration highlighted in recent comparative studies (Zhao et al.,
+2024).
+
+Other models, such as **Google Gemini 1.5 Pro**, were considered but
+ultimately excluded due to limited evidence of superior Spanish language
+performance. Additionally, models like **Cohere's Command R+**, while
+excellent in retrieval-augmented generation (RAG), are not optimized for
+subjective classification tasks without retrieval support. Lastly,
+**LLaMA 2-7B** was excluded based on its substantially lower benchmark
+performance across reasoning tasks when compared to both GPT-4o and
+Claude 3.
+
+This tripartite model selection—combining a top-tier commercial model
+(GPT-4o), a competitive alternative from a different provider (Claude 3
+Sonnet), and a state-of-the-art open-source model (Mistral 7B)—ensures
+that our evaluation captures not only accuracy and robustness but also
+cost considerations and implementation feasibility in both academic and
+applied settings.
+
+## References
+
+Liang, P., et al. (2024). *Chatbot Arena and LMSYS Leaderboard.*
+Retrieved from <https://chat.lmsys.org>\
+
+OpenAI. (2024). *GPT-4o System Card.* Retrieved from
+<https://openai.com/research/gpt-4o-system-card>\
+
+Zhao, W., et al. (2023). *Prompt Robustness in LLMs: An Empirical
+Study.* arXiv:2309.01234\
+
+Anthropic. (2024). *Claude 3 Technical Report.* Retrieved from
+<https://www.anthropic.com/news/claude-3-family>\
+
+Anthropic. (2025). *Claude 3 Pricing.* Retrieved from
+<https://www.anthropic.com/pricing>\
+
+Mistral AI. (2023). *Introducing Mistral 7B.* Retrieved from
+<https://mistral.ai/news/mistral-7b/>\
+
+Touvron, H., et al. (2023). *LLaMA 2: Open Foundation and Fine-Tuned
+Chat Models.* arXiv:2307.09288\
+
+Zhao, Z., et al. (2024). *Are Open-Source LLMs Catching Up? A
+Comparative Study.* arXiv:2402.03211\
+
+Cohere. (2024). *Command R+ Overview.* Retrieved from
+<https://cohere.com>
