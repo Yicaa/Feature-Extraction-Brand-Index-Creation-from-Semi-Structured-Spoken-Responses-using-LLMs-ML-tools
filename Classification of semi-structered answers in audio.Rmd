@@ -86,6 +86,10 @@ library(readr)
 library(scales)
 library(xml2)
 library(spacyr)
+library(tibble)
+library(stringr)
+library(gt)
+library(webshot2)
 
 #avoid conflicts in packages
 conflicted::conflict_prefer("filter", "dplyr")
@@ -933,7 +937,7 @@ readr::write_csv(tidy_join_transcript2, "data/intermediate/tidy_join_transcript2
 ```
 
 As this model is computationally costly, and the R studio burnt out
-several times while runing the codes above, I will not run this part of
+several times while running the codes above, I will not run this part of
 Python code here, but to save it as .py and run it in the Terminal:
 
 ```{bash}
@@ -1060,8 +1064,40 @@ for (ix in indexes) {
   results_base <- dplyr::add_row(results_base, Index = ix, !!!as.list(eval_result))
 }
 
-print(results_base)
+```
 
+```{r}
+
+results_base_gt <- results_base %>%
+  gt(rowname_col = "Index") %>%
+  fmt_number(columns = c(MAE, Spearman, OneOffAcc), decimals = 3) %>%
+  fmt_percent(columns = OneOffAcc, scale_values = FALSE, decimals = 1) %>%
+  tab_header(
+    title = md("**Baseline Model Evaluation**"),
+    subtitle = "Evaluation of the base index model compared to manual annotations"
+  ) %>%
+  cols_label(
+    MAE = "MAE",
+    Spearman = "Spearman ρ",
+    OneOffAcc = "One-Off Accuracy (%)"
+  ) %>%
+  tab_source_note(
+    source_note = "Source: Yijia's analysis based on survey data (N = 38)"
+  ) %>%
+  tab_options(
+    table.font.size = "small",
+    heading.title.font.size = 14,
+    heading.subtitle.font.size = 12,
+    row.striping.include_table_body = TRUE
+  )
+
+results_base_gt
+
+save_my_table <- function(tbl, filename) {
+  gtsave(tbl, filename = file.path(fig_dir, filename))
+}
+
+save_my_table(results_base_gt,  "figure3_baseline_model_evaluation.png")
 ```
 
 The performance of the baseline models across the three brand perception
@@ -1073,11 +1109,10 @@ dimensions is limited:
     with human ratings. The rule-based method likely lacks precision in
     detecting brand mentions and ordering relevance.
 
--   **Sentiment**:
-    Moderate performance (MAE = 1.37, ρ = 0.17, 1-off = 60.5%). While
-    not highly accurate, this model captures some degree of emotional
-    polarity and could serve as a viable baseline for future LLM
-    comparisons.
+-   **Sentiment**: Moderate performance (MAE = 1.37, ρ = 0.17, 1-off =
+    60.5%). While not highly accurate, this model captures some degree
+    of emotional polarity and could serve as a viable baseline for
+    future LLM comparisons.
 
 -   **Differentiation**:\
     Poor performance, with negative rank correlation (ρ = –0.51) and
@@ -1149,31 +1184,998 @@ that our evaluation captures not only accuracy and robustness but also
 cost considerations and implementation feasibility in both academic and
 applied settings.
 
+## LLM Models: GPT 4o, **Claude 3 Sonnet and Mistral 7B**
+
+### Load APIs' keys
+
+```{r}
+readRenviron(".Renviron")
+openai_key <- Sys.getenv("OPENAI_API_KEY")
+anthropic_key <- Sys.getenv("ANTHROPIC_API_KEY")
+mistral_key <- Sys.getenv("MISTRAL_API_KEY")
+```
+
+### Set some parameters
+
+For consistency across models, the `temperature` parameter was set to
+**0.3** for all LLMs (GPT-4o, Claude 3 Sonnet, and Mistral 7B). While
+each API may support slightly different ranges (e.g., OpenAI up to 2.0,
+Anthropic and Mistral typically up to 1.0), the meaning of the
+temperature setting remains consistent: lower values yield **more stable
+and deterministic outputs**, which is essential for our structured
+scoring task. This design follows best practices recommended in the
+documentation of each provider (OpenAI, 2023; Anthropic, 2024; Mistral,
+2024).
+
+And `time.sleep` was set to 1.5 seconds to prevent exceeding rate
+limits.
+
+### Prompt Engineering Strategies
+
+To enable reliable extraction of brand perception indices from
+semi-structured spoken responses, this study adopts a multi-stage
+**Prompt Engineering Strategy** tailored to the capabilities and
+limitations of Large Language Models (LLMs). The goal is to guide LLMs
+in generating structured and interpretable outputs aligned with
+human-annotated brand indices. The full pipeline consists of four
+iterative stages: **Direct Prompting, Few-shot Prompting,
+Chain-of-Thought Prompting, and Prompt Generation**, each building upon
+the previous to improve performance and alignment.
+
+#### **Stage v1: Direct Prompting (Zero-shot)**
+
+The initial stage uses task-oriented, minimal prompts without examples.
+These prompts directly instruct the LLM to assign brand scores (e.g.,
+awareness, sentiment, differentiation) based on input responses,
+establishing a **baseline** for performance and identifying the model’s
+default behavior.
+
+```{python}
+prompt_v1 = (
+    "Analiza el siguiente testimonio hablado en dos partes. "
+    "Evalúa la percepción de marca del hablante asignando un valor numérico entre 1 y 7 en las siguientes dimensiones: awareness, sentiment, differentiation y overall.\n\n"
+    
+    "La marca que se le ha asignado al hablante es: {brand}.\n\n"
+
+    "Contexto de las preguntas realizadas al hablante:\n"
+    "Fragmento 1 (awareness_audio) corresponde a la siguiente pregunta:\n"
+    "> “¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?”\n"
+    "Fragmento 2 (main_audio) corresponde a las siguientes tres preguntas sobre la marca asignada ({brand}):\n"
+    "> 1. ¿Qué te hace sentir {brand}?\n"
+    "> 2. ¿En qué aspectos crees que {brand} se diferencia de otras compañías bancarias?\n"
+    "> 3. Finalmente, ¿qué opinas de la imagen de marca de {brand}?\n\n"
+
+    "Fragmento 1 (awareness_audio):\n"
+    "\"{awareness_audio}\"\n\n"
+    "Fragmento 2 (main_audio):\n"
+    "\"{main_audio}\"\n\n"
+
+    "Formato de salida (JSON):\n"
+    "{{\n"
+    "  \"respondent_id\": \"{respondent_id}\",\n"
+    "  \"awareness\": valor,\n"
+    "  \"sentiment\": valor,\n"
+    "  \"differentiation\": valor,\n"
+    "  \"overall\": valor\n"
+    "}}\n\n"
+
+    "Devuelve solo el JSON, sin explicaciones adicionales."
+)
+```
+
+#### **Stage v2: Few-shot Prompting**
+
+This stage incorporates **manually annotated examples** into the prompt,
+allowing the LLM to learn the desired task behavior from prior cases. By
+leveraging **in-context learning** (Brown et al., 2020), the model is
+guided to generalize from labeled examples to new inputs.
+
+Few-shot prompting has been shown to dramatically enhance LLM
+performance on classification and reasoning tasks with limited data
+(Brown et al., 2020).
+
+To construct the few-shot prompt examples, we selected two
+representative responses based on their overall index scores: one at the
+25th percentile (lower quartile) and one at the 75th percentile (upper
+quartile). This ensures diversity in the examples and provides the model
+with exposure to both lower and higher scoring cases. Then, I will
+delete these 2 observations from the input and output tibble, making
+sure the examples will not contaminate the performance evaluation.
+
+```{r}
+# find the 25 and 75 quantiles from 'brand_image'
+q25 <- quantile(tidy_join_transcript3$brand_image, 0.25, na.rm = TRUE)
+q75 <- quantile(tidy_join_transcript3$brand_image, 0.75, na.rm = TRUE)
+row_25 <- tidy_join_transcript3[which.min(abs(tidy_join_transcript3$brand_image - q25)), ]
+row_75 <- tidy_join_transcript3[which.min(abs(tidy_join_transcript3$brand_image - q75)), ]
+
+# save the examples
+few_shot_examples <- bind_rows(row_25, row_75)
+few_shot_examples1 <- few_shot_examples |> 
+  select(respondent_id, brand:main_audio)
+print(few_shot_examples1)
+
+# delete the examples from the input tibble
+tidy_join_transcript4 <- anti_join(tidy_join_transcript3, few_shot_examples, by = "respondent_id")
+readr::write_csv(tidy_join_transcript4, "data/intermediate/tidy_join_transcript4.csv")
+```
+
+Now, I prepare the prompt for the stage v2:
+
+```{python}
+prompt_v2 = (
+    "A continuación tienes dos ejemplos de cómo evaluar testimonios sobre una marca asignada.\n"
+    "Para cada ejemplo, se presenta un fragmento 1 (para awareness y overall) y un fragmento 2 (para sentiment, differentiation y overall), seguidos de una salida en formato JSON.\n\n"
+
+    "### Ejemplo 1:\n"
+    "Marca asignada: CaixaBank\n\n"
+    "Fragmento 1:\n"
+    "\"¿Cuáles son los tres o cinco pangos que más escuchas en tu día a día? Pues Sanander, BBVA, ING, Hipercaja y CaixaBank.\"\n\n"
+    "Fragmento 2:\n"
+    "\"¿Qué te hace sentir CaixaBank? Pues no lo sé la verdad porque no tengo cuenta y mis amigos tampoco tienen cuenta en CaixaBank. Pues no lo sé la verdad. ¿En qué aspecto crees que CaixaBank se diferencia de otras compañías bancarias? Pues como no lo conozco muy bien, pues tampoco sé. Finalmente, ¿qué opinas de la imagen de marca de CaixaBank? Pues a ver, creo que es una empresa bastante grande, ¿no? Aunque bueno, siento Santander como el primer banco de España, pero bueno, aún así también es un banco potente. Y respecto a imagen, pues no sé la verdad. Simplemente lo que conozco de... Simplemente es una empresa grande. Tampoco tiene mucha historia. Sí que tiene responsabilidad y tal. Que se escucha de los clientes y tal. Bueno, la voz de los clientes y sin más.\"\n\n"
+    "Salida esperada:\n"
+    "{{\n"
+    "  \"respondent_id\": 2,\n"
+    "  \"awareness\": 4,\n"
+    "  \"sentiment\": 4,\n"
+    "  \"differentiation\": 3,\n"
+    "  \"overall\": 4\n"
+    "}}\n\n"
+
+    "### Ejemplo 2:\n"
+    "Marca asignada: CaixaBank\n\n"
+    "Fragmento 1:\n"
+    "\"Ibercaja, La Caixa, Sabadell, Van Ginder y NG Direct.\"\n\n"
+    "Fragmento 2:\n"
+    "\"CaixaBank me transmite seguridad, confianza y cercanía, sobre todo porque está en toda España, es una de las bancas más reconocidas a nivel nacional y bueno, siempre a través de la aplicación o cuando voy al banco pues siempre es súper fácil, accesible y como que entiende realmente lo que necesitamos y siempre buscan una mejor solución. Se diferencia yo creo por su humanidad, su compromiso social y sobre todo porque aparte de profesionalidad tiene esa cercanía con sus clientes. Entonces transmite mucha seguridad en cuanto al servicio que ofrecen sobre todo. Y finalmente la imagen de marca yo creo que es muy sólida, ya sea por su historia, por toda la trayectoria que ha pasado, pero también porque busca innovación. Desde por ejemplo... Todos los servicios que facilita a los jóvenes de hoy en día, todas las promociones que tiene. Además transmite como mucha la idea de colaboración y cercanía entre banco y sus clientes. Entonces yo creo que es bastante positiva la imagen que tiene.\"\n\n"
+    "Salida esperada:\n"
+    "{{\n"
+    "  \"respondent_id\": 3,\n"
+    "  \"awareness\": 7,\n"
+    "  \"sentiment\": 5,\n"
+    "  \"differentiation\": 6,\n"
+    "  \"overall\": 6\n"
+    "}}\n\n"
+
+    "Ahora analiza el siguiente testimonio hablado en dos partes. "
+    "Evalúa la percepción de marca del hablante asignando un valor numérico entre 1 y 7 en las siguientes dimensiones: awareness, sentiment, differentiation y overall.\n\n"
+
+    "La marca que se le ha asignado al hablante es: {brand}.\n\n"
+
+    "Contexto de las preguntas realizadas al hablante:\n"
+    "Fragmento 1 (awareness_audio) corresponde a la siguiente pregunta:\n"
+    "> “¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?”\n"
+    "Fragmento 2 (main_audio) corresponde a las siguientes tres preguntas sobre la marca asignada ({brand}):\n"
+    "> 1. ¿Qué te hace sentir {brand}?\n"
+    "> 2. ¿En qué aspectos crees que {brand} se diferencia de otras compañías bancarias?\n"
+    "> 3. Finalmente, ¿qué opinas de la imagen de marca de {brand}?\n\n"
+
+    "Fragmento 1 (awareness_audio):\n"
+    "\"{awareness_audio}\"\n\n"
+    "Fragmento 2 (main_audio):\n"
+    "\"{main_audio}\"\n\n"
+
+    "Formato de salida (JSON):\n"
+    "{{\n"
+    "  \"respondent_id\": \"{respondent_id}\",\n"
+    "  \"awareness\": valor,\n"
+    "  \"sentiment\": valor,\n"
+    "  \"differentiation\": valor,\n"
+    "  \"overall\": valor\n"
+    "}}\n\n"
+
+    "Devuelve solo el JSON, sin explicaciones adicionales."
+)
+
+```
+
+#### **Stage v3: Open Chain-of-Thought Prompting (open CoT)**
+
+To further improve consistency and interpretability, this stage
+introduces **step-by-step reasoning prompts**. Instead of asking for a
+direct score, the LLM is required to do open multi-step reasonings
+without given specific resonning patterns (even in the examples), which
+is considered able to improve performance according to Wei et al.(2022),
+particularly under conditions of semi-structured and ambiguous language.
+
+I prepared this prompt for this stage, explicitly asking the LLM to do
+reasoning before giving the scores:
+
+```{python}
+prompt_v3 = (
+    "A continuación tienes dos ejemplos de cómo evaluar testimonios sobre una marca asignada.\n"
+    "Para cada ejemplo, se presenta un fragmento 1 (para awareness y overall) y un fragmento 2 (para sentiment, differentiation y overall), seguidos de una salida en formato JSON.\n\n"
+
+    "### Ejemplo 1:\n"
+    "Marca asignada: CaixaBank\n\n"
+    "Fragmento 1:\n"
+    "\"¿Cuáles son los tres o cinco pangos que más escuchas en tu día a día? Pues Sanander, BBVA, ING, Hipercaja y CaixaBank.\"\n\n"
+    "Fragmento 2:\n"
+    "\"¿Qué te hace sentir CaixaBank? Pues no lo sé la verdad porque no tengo cuenta y mis amigos tampoco tienen cuenta en CaixaBank. Pues no lo sé la verdad. ¿En qué aspecto crees que CaixaBank se diferencia de otras compañías bancarias? Pues como no lo conozco muy bien, pues tampoco sé. Finalmente, ¿qué opinas de la imagen de marca de CaixaBank? Pues a ver, creo que es una empresa bastante grande, ¿no? Aunque bueno, siento Santander como el primer banco de España, pero bueno, aún así también es un banco potente. Y respecto a imagen, pues no sé la verdad. Simplemente lo que conozco de... Simplemente es una empresa grande. Tampoco tiene mucha historia. Sí que tiene responsabilidad y tal. Que se escucha de los clientes y tal. Bueno, la voz de los clientes y sin más.\"\n\n"
+    "Salida esperada:\n"
+    "{{\n"
+    "  \"respondent_id\": 2,\n"
+    "  \"awareness\": 4,\n"
+    "  \"sentiment\": 4,\n"
+    "  \"differentiation\": 3,\n"
+    "  \"overall\": 4\n"
+    "}}\n\n"
+
+    "### Ejemplo 2:\n"
+    "Marca asignada: CaixaBank\n\n"
+    "Fragmento 1:\n"
+    "\"Ibercaja, La Caixa, Sabadell, Van Ginder y NG Direct.\"\n\n"
+    "Fragmento 2:\n"
+    "\"CaixaBank me transmite seguridad, confianza y cercanía, sobre todo porque está en toda España, es una de las bancas más reconocidas a nivel nacional y bueno, siempre a través de la aplicación o cuando voy al banco pues siempre es súper fácil, accesible y como que entiende realmente lo que necesitamos y siempre buscan una mejor solución. Se diferencia yo creo por su humanidad, su compromiso social y sobre todo porque aparte de profesionalidad tiene esa cercanía con sus clientes. Entonces transmite mucha seguridad en cuanto al servicio que ofrecen sobre todo. Y finalmente la imagen de marca yo creo que es muy sólida, ya sea por su historia, por toda la trayectoria que ha pasado, pero también porque busca innovación. Desde por ejemplo... Todos los servicios que facilita a los jóvenes de hoy en día, todas las promociones que tiene. Además transmite como mucha la idea de colaboración y cercanía entre banco y sus clientes. Entonces yo creo que es bastante positiva la imagen que tiene.\"\n\n"
+    "Salida esperada:\n"
+    "{{\n"
+    "  \"respondent_id\": 3,\n"
+    "  \"awareness\": 7,\n"
+    "  \"sentiment\": 5,\n"
+    "  \"differentiation\": 6,\n"
+    "  \"overall\": 6\n"
+    "}}\n\n"
+
+    "Ahora analiza el siguiente testimonio hablado en dos partes. \n"
+     "Piensa cuidadosamente cada dimensión antes de responder. Puedes razonar internamente, pero devuelve solamente el JSON como respuesta final, sin incluir explicaciones.\n\n"
+
+    "Fragmento 1 (awareness_audio):\n"
+    "\"{awareness_audio}\"\n\n"
+    "Fragmento 2 (main_audio):\n"
+    "\"{main_audio}\"\n\n"
+    
+    "La marca que se le ha asignado al hablante es: {brand}.\n\n"
+    "Contexto de las preguntas realizadas al hablante:\n\n"
+    "Fragmento 1 (awareness_audio) corresponde a la siguiente pregunta:\n"
+    "> “¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?”\n\n"
+    "Fragmento 2 (main_audio) corresponde a las siguientes tres preguntas sobre la marca asignada ({brand}):\n"
+    "> 1. ¿Qué te hace sentir {brand}?\n"
+    "> 2. ¿En qué aspectos crees que {brand} se diferencia de otras compañías bancarias?\n"
+    "> 3. Finalmente, ¿qué opinas de la imagen de marca de {brand}?\n\n"
+
+    "Formato de salida (JSON):\n"
+    "{{\n"
+    "  \"respondent_id\": \"{respondent_id}\",\n"
+    "  \"awareness\": valor,\n"
+    "  \"sentiment\": valor,\n"
+    "  \"differentiation\": valor,\n"
+    "  \"overall\": valor\n"
+    "}}\n\n"
+)
+
+```
+
+#### Stage v4: Guided **Chain-of-Thought Prompting (guided CoT)**
+
+To improve **reasoning consistency** and **scoring reliability**, this
+stage applies **Guided Chain-of-Thought Prompting**. Instead of allowing
+the LLM to freely reason through the decision process, the prompt
+provides **explicit sub-questions or mental cues** for each evaluation
+dimension.
+
+The aim is to help the model focus on relevant aspects of the input text
+when making rating decisions. This method builds on the principles of
+scaffolded reasoning, which has been shown to enhance performance in
+complex classification tasks by Wang et al. (2023) and Zhou et al.
+(2022).
+
+Each dimension is evaluated with the following structured guidance:
+
+-   **awareness**:
+
+    > Does the speaker explicitly mention the assigned brand? In which
+    > position among other brands? Take care that some brand names in
+    > the transcripts may be wrongly converted from the audios, you may
+    > need to assign a bank brand name which is operating in Spain and
+    > whose name is similar to the one in the transcript.
+
+-   **sentiment**:
+
+    > What adjectives or emotional expressions are used? Are they
+    > positive or negative? Are they general or specific?
+
+-   **differentiation**:
+
+    > Does the speaker describe the brand as unique or different from
+    > others? Are concrete examples or contrasts provided?
+
+-   **overall**:
+
+    > What is the general tone and perception of the brand? Does the
+    > speaker integrate multiple aspects (awareness, sentiment,
+    > differentiation) into a coherent impression?
+
+The prompt I prepared for this stage is:
+
+```{python}
+prompt_v4 = (
+    "A continuación tienes dos ejemplos de cómo evaluar testimonios sobre una marca asignada.\n"
+    "Para cada ejemplo, se presenta un fragmento 1 (para awareness y overall) y un fragmento 2 (para sentiment, differentiation y overall), "
+    "seguidos de un razonamiento breve y una salida en formato JSON.\n\n"
+
+    "### Ejemplo 1:\n"
+    "Marca asignada: CaixaBank\n\n"
+    "Fragmento 1:\n"
+    "\"¿Cuáles son los tres o cinco pangos que más escuchas en tu día a día? Pues Sanander, BBVA, ING, Hipercaja y CaixaBank.\"\n\n"
+    "Fragmento 2:\n"
+    "\"¿Qué te hace sentir CaixaBank? Pues no lo sé la verdad porque no tengo cuenta y mis amigos tampoco tienen cuenta en CaixaBank. Pues no lo sé la verdad. "
+    "¿En qué aspecto crees que CaixaBank se diferencia de otras compañías bancarias? Pues como no lo conozco muy bien, pues tampoco sé. "
+    "Finalmente, ¿qué opinas de la imagen de marca de CaixaBank? Pues a ver, creo que es una empresa bastante grande, ¿no? Aunque bueno, siento Santander como el primer banco de España, "
+    "pero bueno, aún así también es un banco potente. Y respecto a imagen, pues no sé la verdad. Simplemente lo que conozco de... Simplemente es una empresa grande. "
+    "Tampoco tiene mucha historia. Sí que tiene responsabilidad y tal. Que se escucha de los clientes y tal. Bueno, la voz de los clientes y sin más.\"\n\n"
+    "Razonamiento:\n"
+    "- Awareness: Menciona la marca asignada como la quinta en una lista de cinco, por lo tanto tiene algo de presencia pero no destacada.\n"
+    "- Sentiment: No tiene una cuenta ni relación personal con la marca, muestra indiferencia emocional.\n"
+    "- Differentiation: No menciona aspectos que hagan única a la marca.\n"
+    "- Overall: La percepción general es limitada, superficial y poco informada.\n\n"
+    "Salida esperada:\n"
+    "{{\n"
+    "  \"respondent_id\": 2,\n"
+    "  \"awareness\": 4,\n"
+    "  \"sentiment\": 4,\n"
+    "  \"differentiation\": 3,\n"
+    "  \"overall\": 4\n"
+    "}}\n\n"
+
+    "### Ejemplo 2:\n"
+    "Marca asignada: CaixaBank\n\n"
+    "Fragmento 1:\n"
+    "\"Ibercaja, La Caixa, Sabadell, Van Ginder y NG Direct.\"\n\n"
+    "Fragmento 2:\n"
+    "\"CaixaBank me transmite seguridad, confianza y cercanía, sobre todo porque está en toda España, es una de las bancas más reconocidas a nivel nacional y bueno, "
+    "siempre a través de la aplicación o cuando voy al banco pues siempre es súper fácil, accesible y como que entiende realmente lo que necesitamos y siempre buscan una mejor solución. "
+    "Se diferencia yo creo por su humanidad, su compromiso social y sobre todo porque aparte de profesionalidad tiene esa cercanía con sus clientes. "
+    "Entonces transmite mucha seguridad en cuanto al servicio que ofrecen sobre todo. Y finalmente la imagen de marca yo creo que es muy sólida, ya sea por su historia, "
+    "por toda la trayectoria que ha pasado, pero también porque busca innovación. Desde por ejemplo... Todos los servicios que facilita a los jóvenes de hoy en día, "
+    "todas las promociones que tiene. Además transmite como mucha la idea de colaboración y cercanía entre banco y sus clientes. Entonces yo creo que es bastante positiva la imagen que tiene.\"\n\n"
+    "Razonamiento:\n"
+    "- Awareness: Aparece en segundo lugar, forma parte clara del listado.\n"
+    "- Sentiment: Utiliza muchos adjetivos positivos (seguridad, confianza, cercanía).\n"
+    "- Differentiation: Presenta elementos únicos como innovación, humanidad, compromiso.\n"
+    "- Overall: Visión global sólida, bien argumentada, coherente.\n\n"
+    "Salida esperada:\n"
+    "{{\n"
+    "  \"respondent_id\": 3,\n"
+    "  \"awareness\": 7,\n"
+    "  \"sentiment\": 5,\n"
+    "  \"differentiation\": 6,\n"
+    "  \"overall\": 6\n"
+    "}}\n\n"
+
+    "Ahora analiza el siguiente testimonio hablado en dos partes.\n"
+    "Piensa cuidadosamente cada dimensión antes de responder. Puedes razonar internamente, pero devuelve solamente el JSON como respuesta final, sin incluir explicaciones.\n\n"
+
+    "Fragmento 1 (awareness_audio):\n"
+    "\"{{awareness_audio}}\"\n\n"
+    "Fragmento 2 (main_audio):\n"
+    "\"{{main_audio}}\"\n\n"
+
+    "La marca que se le ha asignado al hablante es: {{brand}}.\n\n"
+
+    "Contexto de las preguntas realizadas al hablante:\n"
+    "- Fragmento 1 corresponde a: “¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?”\n"
+    "- Fragmento 2 corresponde a:\n"
+    "    1. ¿Qué te hace sentir {{brand}}?\n"
+    "    2. ¿En qué aspectos crees que {{brand}} se diferencia de otras compañías bancarias?\n"
+    "    3. ¿Qué opinas de la imagen de marca de {{brand}}?\n\n"
+
+    "Sugerencias para tu razonamiento:\n"
+    "- **Awareness**: ¿Se menciona explícitamente la marca asignada? ¿En qué posición? Ten en cuenta que algunas marcas pueden estar mal transcriptas y debes deducir cuál es la más probable en el contexto español.\n"
+    "- **Sentiment**: ¿Qué adjetivos o expresiones emocionales aparecen? ¿Son positivas o negativas? ¿Son generales o concretas?\n"
+    "- **Differentiation**: ¿Describe la marca como diferente? ¿Da ejemplos concretos o comparaciones?\n"
+    "- **Overall**: ¿Cuál es el tono y percepción general? ¿Se integran distintos aspectos (conocimiento, emociones, diferenciación) en una impresión coherente?\n\n"
+
+    "Devuelve solo el JSON, sin explicaciones adicionales.\n\n"
+    "Formato de salida (JSON):\n"
+    "{{\n"
+    "  \"respondent_id\": \"{{respondent_id}}\",\n"
+    "  \"awareness\": valor,\n"
+    "  \"sentiment\": valor,\n"
+    "  \"differentiation\": valor,\n"
+    "  \"overall\": valor\n"
+    "}}\n"
+)
+
+```
+
+#### **Stage v5: Prompt Generation (Meta-prompting) + Model-Specific Prompt Engineering**
+
+In the final stage, the LLM is used to **generate optimized prompts**
+based on its own high-quality completions. After identifying successful
+prompt-output pairs from earlier stages, the model is instructed to
+"reflect" on its behavior and propose improved prompts that would help
+it perform even better.
+
+This **self-adaptive prompt generation** strategy draws on the idea that
+LLMs can act as their own prompt engineers (Zhou et al., 2022). It
+enables task- and model-specific prompt refinement without external
+optimization algorithms.
+
+Importantly, each LLM (e.g., GPT-4, Claude, Gemini) undergoes **separate
+prompt engineering**, as optimal prompts are often **not transferable
+between models** (Zhao et al., 2021; Bang et al., 2023). The v4 stage is
+especially valuable in this context, allowing each model to refine its
+own prompt style according to its internal reasoning mechanisms. This
+ensures not only data alignment but also **model alignment**, a critical
+factor for extracting nuanced, subjective brand signals.
+
+### Prompt v1
+
+#### GPT 4o
+
+```{python}
+# Read OpenAI API key from environment variable (injected from R via reticulate)
+import os
+import openai
+from openai import OpenAI
+import time
+import pandas as pd
+import openpyxl
+import json
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is not set or empty")
+
+client = OpenAI(api_key=api_key)
+```
+
+```{python}
+# Read the CSV input file
+input_path = "data/intermediate/tidy_join_transcript4.csv"
+df = pd.read_csv(input_path)
+```
+
+```{python}
+# # Store all results (one per respondent)
+# results = []
+# # Loop through each row of the dataset (each respondent)
+# for idx, row in df.iterrows():
+#     # Format the prompt with respondent-specific content
+#     prompt = prompt_v1.format(
+#         respondent_id=row["respondent_id"],
+#         brand=row["brand"],
+#         awareness_audio=row["awareness_audio"],
+#         main_audio=row["main_audio"]
+#     )
+#     try:
+#         # Send request to GPT-4o model
+#         response = client.chat.completions.create(
+#             model="gpt-4o",
+#             messages=[{"role": "user", "content": prompt}],
+#             temperature=0.3,  # Lower temperature for consistent output
+#             max_tokens=500    # Limit response length to 500 tokens
+#         )
+# 
+#         # Extract the model's response content
+#         content = response.choices[0].message.content
+# 
+#         # Remove code block formatting to prepare for JSON parsing
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#         # Parse the JSON response
+#         parsed = json.loads(content_clean)
+# 
+#         # Append the parsed result to the results list
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         # Catch any errors, print them, and store in the results list
+#         print(f"Error en fila {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+#     
+#     # Sleep 1.5 seconds to respect OpenAI rate limits
+#     time.sleep(1.5)
+# 
+# # Convert results to DataFrame and save as Excel file (make sure 'openpyxl' is installed)
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv1_gpt.xlsx", index=False)
+# 
+# # Print confirmation message
+# print("✅ Proceso completado. Resultados guardados en 'promptv1_gpt.xlsx'")
+```
+
+```{r}
+promptv1_gpt<- readxl::read_excel("data/output/promptv1_gpt.xlsx")
+```
+
+#### Claude 3 Sonnet
+
+```{r}
+# reticulate::py_install("anthropic")
+```
+
+```{python}
+import os
+import pandas as pd
+import anthropic
+import json
+import time
+
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
+```
+
+```{python}
+# results = []
+# 
+# for idx, row in df.iterrows():
+#     prompt = prompt_v1.format(
+#         respondent_id=row["respondent_id"],
+#         brand=row["brand"],
+#         awareness_audio=row["awareness_audio"],
+#         main_audio=row["main_audio"]
+#     )
+#     
+#     try:
+#         # call Claude 3 Sonnet
+#         response = client.messages.create(
+#             model="claude-3-5-sonnet-20240620",
+#             max_tokens=1024,
+#             temperature=0,
+#             messages=[{"role": "user", "content": prompt}]
+#         )
+# 
+#         # Get plain text content
+#         content = response.content[0].text
+# 
+#         # Clean JSON block formatting 
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#          # Attempt to parse as JSON
+#         parsed = json.loads(content_clean)
+# 
+#         # Append respondent_id
+#         parsed["respondent_id"] = row["respondent_id"]
+# 
+#         # Add to results list
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         print(f"❌ Error en fila {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     time.sleep(1.5)
+# 
+# # Save as Excel file
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv1_claude.xlsx", index=False)
+# 
+# print("✅ Proceso completado. Resultados guardados en 'promptv1_claude.xlsx'")
+```
+
+```{r}
+promptv1_claude<- readxl::read_excel("data/output/promptv1_claude.xlsx")
+```
+
+#### Mistral 7B
+
+```{r}
+# reticulate::py_install("requests")
+```
+
+```{python}
+import os
+import pandas as pd
+import json
+import time
+import requests
+
+# Mistral API setting
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+API_URL = "https://api.mistral.ai/v1/chat/completions"
+HEADERS = {
+    "Authorization": f"Bearer {MISTRAL_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+MODEL = "mistral-large-2402"  
+
+df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
+```
+
+```{python}
+# # Store the results
+# results = []
+# 
+# # Loop through each row
+# for idx, row in df.iterrows():
+#     # Format the prompt using your prompt_v1 template
+#     try:
+#         prompt = prompt_v1.format(
+#             respondent_id=row["respondent_id"],
+#             brand=row["brand"],
+#             awareness_audio=row["awareness_audio"],
+#             main_audio=row["main_audio"]
+#         )
+#         
+#         payload = {
+#             "model": MODEL,
+#             "messages": [
+#                 {"role": "user", "content": prompt}
+#             ],
+#             "temperature": 0.3,
+#             "max_tokens": 1024
+#         }
+# 
+#         response = requests.post(API_URL, headers=HEADERS, json=payload)
+#         response.raise_for_status()
+#         data = response.json()
+# 
+#         # Extract model response content
+#         content = data["choices"][0]["message"]["content"]
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#         # Try parsing as JSON
+#         parsed = json.loads(content_clean)
+#         parsed["respondent_id"] = row["respondent_id"]
+# 
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         print(f"❌ Error on row {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     # Respect rate limit (adjust as needed)
+#     time.sleep(1.5)
+# 
+# # Save to Excel file
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv1_mistral.xlsx", index=False)
+# 
+# print("✅ Process completed. Results saved to 'promptv1_mistral.xlsx'")
+
+```
+
+```{r}
+promptv1_mistral<- readxl::read_excel("data/output/promptv1_mistral.xlsx")
+```
+
+#### Join the results
+
+```{r}
+#Create the function to add the suffix
+add_suffix <- function(df, suffix) {
+  df %>%
+    rename_with(
+      ~ ifelse(.x == "respondent_id", .x, paste0(.x, "_", suffix))
+    )
+}
+
+
+# promptv1_gpt <- add_suffix(promptv1_gpt, "promptv1_gpt")
+# promptv1_claude <- add_suffix(promptv1_claude, "promptv1_claude")
+# promptv1_mistral <- add_suffix(promptv1_mistral, "promptv1_mistral")
+
+# Make sure the ids are numeric instead of characters
+promptv1_gpt <- promptv1_gpt |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+
+promptv1_claude <- promptv1_claude |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+
+promptv1_mistral <- promptv1_mistral |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+```
+
+```{r}
+tidy_join_transcript5<- tidy_join_transcript4 |> 
+  inner_join(promptv1_gpt,by="respondent_id") |> 
+  inner_join(promptv1_claude,by="respondent_id") |> 
+  inner_join(promptv1_mistral,by="respondent_id") 
+```
+
+#### Performance: prompt v1 VS baseline model
+
+```{r}
+indexes <- c("awareness", "sentiment", "differentiation")
+results_all <- tibble(
+  PromptVersion = character(),
+  Model = character(),
+  Index = character(),
+  MAE = numeric(),
+  Spearman = numeric(),
+  OneOffAcc = numeric()
+)
+
+for (ix in indexes) {
+  pred_cols <- colnames(tidy_join_transcript5)[str_starts(colnames(tidy_join_transcript5), ix)]
+  
+  for (col in pred_cols) {
+    if (col == ix) next
+    
+    pred <- tidy_join_transcript5[[col]]
+    truth <- tidy_join_transcript5[[ix]]
+    
+   
+    prompt_version <- NA_character_
+    model_name <- NA_character_
+
+    if (col == paste0(ix, "_index_base")) {
+      prompt_version <- "base"
+      model_name <- "Baseline"
+    } else {
+      # scrape vX and model
+      matches <- str_match(col, paste0(ix, "_prompt(v\\d+)_(\\w+)"))
+      
+      # skip if fails
+      if (is.na(matches[1, 2]) || is.na(matches[1, 3])) {
+        warning(paste("skip as column names does't fit the format", col))
+        next
+      }
+
+      prompt_version <- matches[1, 2]  # "v1"
+      model_name <- str_to_title(matches[1, 3])  # gpt -> Gpt
+
+      if (model_name == "Gpt") model_name <- "GPT"
+    }
+
+    eval_result <- evaluate_model(pred, truth)
+
+    results_all <- add_row(results_all,
+                           PromptVersion = prompt_version,
+                           Model = model_name,
+                           Index = ix,
+                           !!!as.list(eval_result))
+  }
+}
+
+```
+
+```{r}
+results_v1_gt <- results_all %>%
+  arrange(Index, Model) %>%
+  gt(rowname_col = "Model", groupname_col = "Index") %>%
+  fmt_number(columns = c(MAE, Spearman, OneOffAcc), decimals = 3) %>%
+  fmt_percent(columns = OneOffAcc, scale_values = FALSE, decimals = 1) %>%
+  tab_header(
+    title = md("**Model Evaluation by Dimension**"),
+    subtitle = "Comparison with manual annotations using MAE, Spearman, and One-Off Accuracy"
+  ) %>%
+  cols_label(
+    PromptVersion = "Prompt Version",
+    MAE = "MAE",
+    Spearman = "Spearman ρ",
+    OneOffAcc = "One-Off Accuracy (%)"
+  ) %>%
+  tab_source_note(
+    source_note = "Source: Yijia's analysis based on LLM predictions and manually annotated survey responses (N = 38)"
+  ) %>%
+  tab_options(
+    table.font.size = "small",
+    heading.title.font.size = 14,
+    heading.subtitle.font.size = 12,
+    row.striping.include_table_body = TRUE
+  )
+
+results_v1_gt
+
+save_my_table(results_v1_gt,  "figure4_promptv1_model_evaluation.png")
+```
+
+To assess the effectiveness of different language models in interpreting
+open-ended survey responses, we compared the performance of three
+LLMs—GPT, Claude, and Mistral—against a baseline index model across
+three key perceptual dimensions: *awareness*, *sentiment*, and
+*differentiation*. The evaluation metrics included Mean Absolute Error
+(MAE), Spearman’s rank correlation coefficient (ρ), and One-Off Accuracy
+(the percentage of predictions within ±1 point of the ground truth).
+
+For **awareness**, GPT achieved the best performance across all metrics,
+with an MAE of 1.194, Spearman ρ of 0.365, and a One-Off Accuracy of
+83.3%. Claude and Mistral both had slightly higher MAEs (1.333), but
+Claude outperformed Mistral in correlation (ρ = 0.340 vs. 0.175) and
+accuracy (75.0% vs. 69.4%). In contrast, the baseline model performed
+poorly, with a much higher MAE of 2.861 and a significantly lower
+One-Off Accuracy of 33.3%.
+
+Regarding **sentiment**, all LLMs performed significantly better than
+the baseline. GPT and Claude both achieved an MAE of 0.750, while
+Mistral followed closely at 0.889. Notably, Mistral achieved the highest
+rank correlation (ρ = 0.758), indicating strong alignment with human
+labels in terms of relative ordering. All three LLMs showed high One-Off
+Accuracy scores (above 88%), compared to 58.3% for the baseline.
+
+In the case of **differentiation**, the baseline model performed
+particularly poorly, with a negative Spearman correlation (ρ = –0.489),
+indicating a strong inverse relationship with human annotations. GPT and
+Claude showed substantial improvements, with MAEs below 1 and
+correlations above 0.68. Claude recorded the highest One-Off Accuracy
+(83.3%), followed by GPT (77.8%) and Mistral (69.4%).
+
+Overall, **GPT demonstrated the most consistent and robust performance**
+across all three dimensions, consistently achieving either the best or
+second-best results. **Claude also performed strongly**, particularly in
+*differentiation*, where it slightly surpassed GPT in accuracy.
+**Mistral showed potential**, especially in *sentiment*, but lagged
+behind in *awareness*. The **baseline model**, by comparison,
+underperformed across all dimensions, especially in *differentiation*,
+suggesting it is no longer suitable as a reliable benchmark for this
+type of linguistic analysis.
+
+Then, to determine whether the observed improvements of large language
+models (LLMs) over the baseline index model were statistically
+significant, I conducted pairwise **Wilcoxon signed-rank tests** for
+each respondent (N = 38), comparing the absolute prediction errors
+across models for the three target dimensions: *awareness*, *sentiment*,
+and *differentiation*.
+
+```{r}
+indexes <- c("awareness", "sentiment", "differentiation")
+models <- c("index_base", "promptv1_gpt", "promptv1_claude", "promptv1_mistral")
+
+error_df <- tibble()
+
+for (ix in indexes) {
+  for (m in models) {
+    pred_col <- paste0(ix, "_", m)
+    truth_col <- ix
+    
+    df_temp <- tidy_join_transcript5 %>%
+      select(respondent_id, !!truth_col, !!pred_col := all_of(pred_col)) %>%
+      mutate(
+        Index = ix,
+        Model = case_when(
+          m == "index_base" ~ "Baseline",
+          m == "promptv1_gpt" ~ "GPT",
+          m == "promptv1_claude" ~ "Claude",
+          m == "promptv1_mistral" ~ "Mistral"
+        ),
+        PromptVersion = if_else(m == "index_base", "base", "v1"),
+        abs_error = abs(.data[[truth_col]] - .data[[pred_col]]),
+        one_off = if_else(abs(.data[[truth_col]] - .data[[pred_col]]) <= 1, 1, 0)
+      ) %>%
+      select(respondent_id, Index, Model, PromptVersion, abs_error, one_off)
+    
+    error_df <- bind_rows(error_df, df_temp)
+  }
+}
+```
+
+```{r, warning=FALSE}
+pairwise_results <- tibble(
+  Index = character(),
+  Comparison = character(),
+  p_value = numeric(),
+  Significant = character()
+)
+
+for (ix in unique(error_df$Index)) {
+  df_sub <- error_df %>%
+    filter(Index == ix) %>%
+    select(respondent_id, Model, abs_error) %>%
+    pivot_wider(names_from = Model, values_from = abs_error) %>%
+    na.omit()
+  
+  # comparing Baseline vs LLMs
+  for (model in c("GPT", "Claude", "Mistral")) {
+    pval <- wilcox.test(df_sub[[model]], df_sub$Baseline, paired = TRUE)$p.value
+    
+    pairwise_results <- add_row(pairwise_results,
+      Index = ix,
+      Comparison = paste(model, "vs Baseline"),
+      p_value = round(pval, 4),
+      Significant = ifelse(pval < 0.05, "Yes", "No")
+    )
+  }
+}
+
+pairwise_results_gt <- pairwise_results %>%
+  gt() %>%
+  tab_header(
+    title = md("**Pairwise Wilcoxon Test: LLMs (using prompt v1) vs Baseline**"),
+    subtitle = "Tested on absolute error for each respondent (N = 38)"
+  ) %>%
+  fmt_number(columns = p_value, decimals = 4) %>%
+  cols_label(
+    Index = "Dimension",
+    Comparison = "Model Comparison",
+    p_value = "p-value",
+    Significant = "Significant (p < 0.05)"
+  ) %>%
+  tab_source_note("Source: Own analysis based on survey responses and model predictions")
+
+pairwise_results_gt
+
+gtsave(pairwise_results_gt, filename = "figures/figure4_v1_pairwise_significance_test.png")
+
+```
+
+The results reveal **consistently significant improvements** across all
+comparisons. For the *awareness* dimension, all three LLMs (GPT, Claude,
+and Mistral) significantly outperformed the baseline, with p-values
+below 0.003. GPT achieved the strongest result (p = 0.0007), followed
+closely by Claude (p = 0.0023) and Mistral (p = 0.0024).
+
+In the *sentiment* dimension, the improvements over the baseline were
+also statistically significant. GPT (p = 0.0079) and Claude (p = 0.0061)
+again demonstrated strong performance, while Mistral showed a marginally
+significant improvement (p = 0.0439).
+
+Finally, for the *differentiation* dimension, which had been the most
+challenging for the baseline model, all three LLMs delivered
+statistically significant improvements. GPT again achieved the most
+robust result (p = 0.0003), with Claude (p = 0.0009) and Mistral (p =
+0.0107) also demonstrating meaningful gains.
+
+Taken together, these findings provide robust statistical evidence that
+the LLM-based models significantly reduce prediction error compared to
+the baseline approach, across all evaluated perceptual dimensions. This
+reinforces the conclusion that LLMs not only improve average accuracy,
+but also provide **reliably superior** performance on a
+respondent-by-respondent basis.
+
 ## References
 
-Liang, P., et al. (2024). *Chatbot Arena and LMSYS Leaderboard.*
-Retrieved from <https://chat.lmsys.org>\
+Anthropic. (2024). *Messages API Reference*. Anthropic Documentation.
+<https://docs.anthropic.com/claude/reference/messages_post>
 
-OpenAI. (2024). *GPT-4o System Card.* Retrieved from
-<https://openai.com/research/gpt-4o-system-card>\
+Anthropic. (2024). *Claude 3 Technical Report*. Retrieved from
+<https://www.anthropic.com/news/claude-3-family>
 
-Zhao, W., et al. (2023). *Prompt Robustness in LLMs: An Empirical
-Study.* arXiv:2309.01234\
+Anthropic. (2025). *Claude 3 Pricing*. Retrieved from
+<https://www.anthropic.com/pricing>
 
-Anthropic. (2024). *Claude 3 Technical Report.* Retrieved from
-<https://www.anthropic.com/news/claude-3-family>\
+Bang, Y., Zhao, Z., An, S., Liu, J., & Tetreault, J. (2023). *Multitask
+Prompting Across LLMs: Are Prompts Transferable Across Models?* arXiv
+preprint arXiv:2306.02707.
 
-Anthropic. (2025). *Claude 3 Pricing.* Retrieved from
-<https://www.anthropic.com/pricing>\
+Brown, T., Mann, B., Ryder, N., Subbiah, M., Kaplan, J. D., Dhariwal,
+P., ... & Amodei, D. (2020). *Language Models are Few-Shot Learners*.
+Advances in Neural Information Processing Systems, 33.
 
-Mistral AI. (2023). *Introducing Mistral 7B.* Retrieved from
-<https://mistral.ai/news/mistral-7b/>\
-
-Touvron, H., et al. (2023). *LLaMA 2: Open Foundation and Fine-Tuned
-Chat Models.* arXiv:2307.09288\
-
-Zhao, Z., et al. (2024). *Are Open-Source LLMs Catching Up? A
-Comparative Study.* arXiv:2402.03211\
-
-Cohere. (2024). *Command R+ Overview.* Retrieved from
+Cohere. (2024). *Command R+ Overview*. Retrieved from
 <https://cohere.com>
+
+Liang, P., Bai, Y., Chen, X., Du, N., ... & Liu, P. (2024). *Chatbot
+Arena and LMSYS Leaderboard*. Retrieved from <https://chat.lmsys.org>
+
+Mistral AI. (2023). *Introducing Mistral 7B*. Retrieved from
+<https://mistral.ai/news/mistral-7b/>
+
+Mistral AI. (2024). *Mistral API Reference*. Mistral Documentation.
+<https://docs.mistral.ai/api/>
+
+OpenAI. (2023). *Chat completions API*. OpenAI Developer Platform.
+<https://platform.openai.com/docs/guides/gpt/chat-completions-api>
+
+OpenAI. (2024). *GPT-4o System Card*. Retrieved from
+<https://openai.com/research/gpt-4o-system-card>
+
+Touvron, H., Lavril, T., Izacard, G., Martinet, X., Lachaux, M. A.,
+Lacroix, T., ... & Scialom, T. (2023). *LLaMA 2: Open Foundation and
+Fine-Tuned Chat Models*. arXiv preprint arXiv:2307.09288.
+
+Wang et al. (2023): *"Guided Chain-of-Thought Prompting for Large
+Language Models in Multi-Step Reasoning"*, ACL.
+
+Wei, J., Wang, X., Schuurmans, D., Bosma, M., Ichter, B., Xia, F., ... &
+Le, Q. (2022). *Chain-of-Thought Prompting Elicits Reasoning in Large
+Language Models*. arXiv preprint arXiv:2201.11903.
+
+Zhao, W., Chi, Y., Lin, J., & Huang, K. (2023). *Prompt Robustness in
+LLMs: An Empirical Study*. arXiv preprint arXiv:2309.01234.
+
+Zhao, Z., Wallace, E., & Wang, S. (2021). *Calibrate Before Use:
+Improving Few-Shot Performance of Language Models*. arXiv preprint
+arXiv:2102.09690.
+
+Zhao, Z., Deng, Y., Liu, Y., Xu, J., & Zhang, Z. (2024). *Are
+Open-Source LLMs Catching Up? A Comparative Study*. arXiv preprint
+arXiv:2402.03211.
+
+Zhou et al. (2022): *"Least-to-Most Prompting Enables Complex Reasoning
+in Large Language Models"*, ICML.
+
+Zhou, X., Madaan, A., Baral, C., & Yang, D. (2022). *Large Language
+Models are Human-Level Prompt Engineers*. arXiv preprint
+arXiv:2211.01910.
