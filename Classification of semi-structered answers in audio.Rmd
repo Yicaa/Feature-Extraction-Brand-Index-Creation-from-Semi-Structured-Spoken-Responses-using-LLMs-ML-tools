@@ -1187,7 +1187,7 @@ that our evaluation captures not only accuracy and robustness but also
 cost considerations and implementation feasibility in both academic and
 applied settings.
 
-## 4. LLM Models: **GPT 4o, **Claude 3 Sonnet and Mistral 7B**
+## 4. LLM Models preparation: **GPT 4o,** Claude 3 Sonnet and Mistral 7B\*\*
 
 ### 4.1 Load APIs' keys
 
@@ -1448,7 +1448,7 @@ prompt_v3 = (
 
 ```
 
-#### **Stage v4: Guided **Chain-of-Thought Prompting (guided CoT)**
+#### **Stage v4: Guided** Chain-of-Thought Prompting (guided CoT)\*\*
 
 To improve **reasoning consistency** and **scoring reliability**, this
 stage applies **Guided Chain-of-Thought Prompting**. Instead of allowing
@@ -1549,18 +1549,18 @@ prompt_v4 = (
     "Piensa cuidadosamente cada dimensión antes de responder. Puedes razonar internamente, pero devuelve solamente el JSON como respuesta final, sin incluir explicaciones.\n\n"
 
     "Fragmento 1 (awareness_audio):\n"
-    "\"{{awareness_audio}}\"\n\n"
+    "\"{awareness_audio}\"\n\n"
     "Fragmento 2 (main_audio):\n"
-    "\"{{main_audio}}\"\n\n"
+    "\"{main_audio}\"\n\n"
 
-    "La marca que se le ha asignado al hablante es: {{brand}}.\n\n"
+    "La marca que se le ha asignado al hablante es: {brand}.\n\n"
 
     "Contexto de las preguntas realizadas al hablante:\n"
     "- Fragmento 1 corresponde a: “¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?”\n"
     "- Fragmento 2 corresponde a:\n"
-    "    1. ¿Qué te hace sentir {{brand}}?\n"
-    "    2. ¿En qué aspectos crees que {{brand}} se diferencia de otras compañías bancarias?\n"
-    "    3. ¿Qué opinas de la imagen de marca de {{brand}}?\n\n"
+    "    1. ¿Qué te hace sentir {brand}?\n"
+    "    2. ¿En qué aspectos crees que {brand} se diferencia de otras compañías bancarias?\n"
+    "    3. ¿Qué opinas de la imagen de marca de {brand}?\n\n"
 
     "Sugerencias para tu razonamiento:\n"
     "- **Awareness**: ¿Se menciona explícitamente la marca asignada? ¿En qué posición? Ten en cuenta que algunas marcas pueden estar mal transcriptas y debes deducir cuál es la más probable en el contexto español.\n"
@@ -1571,7 +1571,7 @@ prompt_v4 = (
     "Devuelve solo el JSON, sin explicaciones adicionales.\n\n"
     "Formato de salida (JSON):\n"
     "{{\n"
-    "  \"respondent_id\": \"{{respondent_id}}\",\n"
+    "  \"respondent_id\": {respondent_id},\n"
     "  \"awareness\": valor,\n"
     "  \"sentiment\": valor,\n"
     "  \"differentiation\": valor,\n"
@@ -1602,9 +1602,14 @@ own prompt style according to its internal reasoning mechanisms. This
 ensures not only data alignment but also **model alignment**, a critical
 factor for extracting nuanced, subjective brand signals.
 
-### 4.4 Prompt v1
+## 5. Prompt Engineering
 
-#### 4.4.1 GPT 4o
+Haven the prompts, parameters and LLM models prepared, now I started the
+prompt engineering process.
+
+### 5.1 Prompt v1
+
+#### 5.1.1 GPT 4o
 
 ```{python}
 # Read OpenAI API key from environment variable (injected from R via reticulate)
@@ -1684,7 +1689,7 @@ df = pd.read_csv(input_path)
 promptv1_gpt<- readxl::read_excel("data/output/promptv1_gpt.xlsx")
 ```
 
-#### 4.4.2 Claude 3 Sonnet
+#### 5.1.2 Claude 3 Sonnet
 
 ```{r}
 # reticulate::py_install("anthropic")
@@ -1757,7 +1762,7 @@ df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
 promptv1_claude<- readxl::read_excel("data/output/promptv1_claude.xlsx")
 ```
 
-#### 4.4.3 Mistral 7B
+#### 5.1.3 Mistral 7B
 
 ```{r}
 # reticulate::py_install("requests")
@@ -1843,7 +1848,7 @@ df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
 promptv1_mistral<- readxl::read_excel("data/output/promptv1_mistral.xlsx")
 ```
 
-#### 4.4.4 Join the results
+#### 5.1.4 Join the results
 
 ```{r}
 #Create the function to add the suffix
@@ -1878,7 +1883,7 @@ tidy_join_transcript5<- tidy_join_transcript4 |>
 readr::write_csv(tidy_join_transcript5, "data/intermediate/tidy_join_transcript5.csv")
 ```
 
-#### 4.4.5 Performance: prompt v1 VS baseline model
+#### 5.1.5 Performance: prompt v1 VS baseline model
 
 ```{r}
 indexes <- c("awareness", "sentiment", "differentiation")
@@ -2121,15 +2126,1762 @@ reinforces the conclusion that LLMs not only improve average accuracy,
 but also provide **reliably superior** performance on a
 respondent-by-respondent basis.
 
-### 4.5 Prompt v2
+### 5.2 Prompt v2
+
+#### 5.2.1 GPT 4o
+
+```{python}
+# Read OpenAI API key from environment variable (injected from R via reticulate)
+import os
+import openai
+from openai import OpenAI
+import time
+import pandas as pd
+import openpyxl
+import json
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is not set or empty")
+
+client = OpenAI(api_key=api_key)
+# Read the CSV input file
+input_path = "data/intermediate/tidy_join_transcript4.csv"
+df = pd.read_csv(input_path)
+```
+
+```{python}
+# # Store all results (one per respondent)
+# results = []
+# # Loop through each row of the dataset (each respondent)
+# for idx, row in df.iterrows():
+#     # Format the prompt with respondent-specific content
+#     prompt = prompt_v2.format(
+#         respondent_id=row["respondent_id"],
+#         brand=row["brand"],
+#         awareness_audio=row["awareness_audio"],
+#         main_audio=row["main_audio"]
+#     )
+#     try:
+#         # Send request to GPT-4o model
+#         response = client.chat.completions.create(
+#             model="gpt-4o",
+#             messages=[{"role": "user", "content": prompt}],
+#             temperature=0.3,  # Lower temperature for consistent output
+#             max_tokens=500    # Limit response length to 500 tokens
+#         )
+# 
+#         # Extract the model's response content
+#         content = response.choices[0].message.content
+# 
+#         # Remove code block formatting to prepare for JSON parsing
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#         # Parse the JSON response
+#         parsed = json.loads(content_clean)
+# 
+#         # Append the parsed result to the results list
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         # Catch any errors, print them, and store in the results list
+#         print(f"Error en fila {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     # Sleep 1.5 seconds to respect OpenAI rate limits
+#     time.sleep(1.5)
+# 
+# # Convert results to DataFrame and save as Excel file (make sure 'openpyxl' is installed)
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv2_gpt.xlsx", index=False)
+# 
+# # Print confirmation message
+# print("✅ Proceso completado. Resultados guardados en 'promptv2_gpt.xlsx'")
+```
+
+```{r}
+promptv2_gpt<- readxl::read_excel("data/output/promptv2_gpt.xlsx")
+```
+
+#### 5.2.2 Claude 3 Sonnet
+
+```{r}
+# reticulate::py_install("anthropic")
+```
+
+```{python}
+import os
+import pandas as pd
+import anthropic
+import json
+import time
+
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
+```
+
+```{python}
+# results = []
+# 
+# for idx, row in df.iterrows():
+#     prompt = prompt_v2.format(
+#         respondent_id=row["respondent_id"],
+#         brand=row["brand"],
+#         awareness_audio=row["awareness_audio"],
+#         main_audio=row["main_audio"]
+#     )
+# 
+#     try:
+#         # call Claude 3 Sonnet
+#         response = client.messages.create(
+#             model="claude-3-5-sonnet-20240620",
+#             max_tokens=1024,
+#             temperature=0,
+#             messages=[{"role": "user", "content": prompt}]
+#         )
+# 
+#         # Get plain text content
+#         content = response.content[0].text
+# 
+#         # Clean JSON block formatting
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#          # Attempt to parse as JSON
+#         parsed = json.loads(content_clean)
+# 
+#         # Append respondent_id
+#         parsed["respondent_id"] = row["respondent_id"]
+# 
+#         # Add to results list
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         print(f"❌ Error en fila {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     time.sleep(1.5)
+# 
+# # Save as Excel file
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv2_claude.xlsx", index=False)
+# 
+# print("✅ Proceso completado. Resultados guardados en 'promptv2_claude.xlsx'")
+```
+
+```{r}
+promptv2_claude<- readxl::read_excel("data/output/promptv2_claude.xlsx")
+```
+
+#### 5.2.3 Mistral 7B
+
+```{r}
+# reticulate::py_install("requests")
+```
+
+```{python}
+import os
+import pandas as pd
+import json
+import time
+import requests
+
+# Mistral API setting
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+API_URL = "https://api.mistral.ai/v1/chat/completions"
+HEADERS = {
+    "Authorization": f"Bearer {MISTRAL_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+MODEL = "mistral-large-2402"  
+
+df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
+```
+
+```{python}
+# # Store the results
+# results = []
+# 
+# # Loop through each row
+# for idx, row in df.iterrows():
+#     # Format the prompt using your prompt_v1 template
+#     try:
+#         prompt = prompt_v2.format(
+#             respondent_id=row["respondent_id"],
+#             brand=row["brand"],
+#             awareness_audio=row["awareness_audio"],
+#             main_audio=row["main_audio"]
+#         )
+# 
+#         payload = {
+#             "model": MODEL,
+#             "messages": [
+#                 {"role": "user", "content": prompt}
+#             ],
+#             "temperature": 0.3,
+#             "max_tokens": 1024
+#         }
+# 
+#         response = requests.post(API_URL, headers=HEADERS, json=payload)
+#         response.raise_for_status()
+#         data = response.json()
+# 
+#         # Extract model response content
+#         content = data["choices"][0]["message"]["content"]
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#         # Try parsing as JSON
+#         parsed = json.loads(content_clean)
+#         parsed["respondent_id"] = row["respondent_id"]
+# 
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         print(f"❌ Error on row {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     # Respect rate limit (adjust as needed)
+#     time.sleep(1.5)
+# 
+# # Save to Excel file
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv2_mistral.xlsx", index=False)
+# 
+# print("✅ Process completed. Results saved to 'promptv2_mistral.xlsx'")
+
+```
+
+```{r}
+promptv2_mistral<- readxl::read_excel("data/output/promptv2_mistral.xlsx")
+```
+
+#### 5.2.4 Join the results
+
+```{r}
+promptv2_gpt1 <- add_suffix(promptv2_gpt, "promptv2_gpt")
+promptv2_claude1 <- add_suffix(promptv2_claude, "promptv2_claude")
+promptv2_mistral1 <- add_suffix(promptv2_mistral, "promptv2_mistral")
+
+# Make sure the ids are numeric instead of characters
+promptv2_gpt1 <- promptv2_gpt1 |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+
+promptv2_claude1 <- promptv2_claude1 |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+
+promptv2_mistral1 <- promptv2_mistral1 |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+```
+
+```{r}
+tidy_join_transcript6<- tidy_join_transcript5 |> 
+  inner_join(promptv2_gpt1,by="respondent_id") |> 
+  inner_join(promptv2_claude1,by="respondent_id") |> 
+  inner_join(promptv2_mistral1,by="respondent_id") 
+readr::write_csv(tidy_join_transcript6, "data/intermediate/tidy_join_transcript6.csv")
+```
+
+### 5.3 Prompt v3
+
+#### 5.3.1 GPT 4o
+
+```{python}
+# Read OpenAI API key from environment variable (injected from R via reticulate)
+import os
+import openai
+from openai import OpenAI
+import time
+import pandas as pd
+import openpyxl
+import json
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is not set or empty")
+
+client = OpenAI(api_key=api_key)
+# Read the CSV input file
+input_path = "data/intermediate/tidy_join_transcript4.csv"
+df = pd.read_csv(input_path)
+```
+
+```{python}
+# # Store all results (one per respondent)
+# results = []
+# # Loop through each row of the dataset (each respondent)
+# for idx, row in df.iterrows():
+#     # Format the prompt with respondent-specific content
+#     prompt = prompt_v3.format(
+#         respondent_id=row["respondent_id"],
+#         brand=row["brand"],
+#         awareness_audio=row["awareness_audio"],
+#         main_audio=row["main_audio"]
+#     )
+#     try:
+#         # Send request to GPT-4o model
+#         response = client.chat.completions.create(
+#             model="gpt-4o",
+#             messages=[{"role": "user", "content": prompt}],
+#             temperature=0.3,  # Lower temperature for consistent output
+#             max_tokens=500    # Limit response length to 500 tokens
+#         )
+# 
+#         # Extract the model's response content
+#         content = response.choices[0].message.content
+# 
+#         # Remove code block formatting to prepare for JSON parsing
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#         # Parse the JSON response
+#         parsed = json.loads(content_clean)
+# 
+#         # Append the parsed result to the results list
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         # Catch any errors, print them, and store in the results list
+#         print(f"Error en fila {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     # Sleep 1.5 seconds to respect OpenAI rate limits
+#     time.sleep(1.5)
+# 
+# # Convert results to DataFrame and save as Excel file (make sure 'openpyxl' is installed)
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv3_gpt.xlsx", index=False)
+# 
+# # Print confirmation message
+# print("✅ Proceso completado. Resultados guardados en 'promptv3_gpt.xlsx'")
+```
+
+```{r}
+promptv3_gpt<- readxl::read_excel("data/output/promptv3_gpt.xlsx")
+```
+
+#### 5.3.2 Claude 3 Sonnet
+
+```{r}
+# reticulate::py_install("anthropic")
+```
+
+```{python}
+import os
+import pandas as pd
+import anthropic
+import json
+import time
+
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
+```
+
+```{python}
+# results = []
+# 
+# for idx, row in df.iterrows():
+#     prompt = prompt_v3.format(
+#         respondent_id=row["respondent_id"],
+#         brand=row["brand"],
+#         awareness_audio=row["awareness_audio"],
+#         main_audio=row["main_audio"]
+#     )
+# 
+#     try:
+#         # call Claude 3 Sonnet
+#         response = client.messages.create(
+#             model="claude-3-5-sonnet-20240620",
+#             max_tokens=1024,
+#             temperature=0,
+#             messages=[{"role": "user", "content": prompt}]
+#         )
+# 
+#         # Get plain text content
+#         content = response.content[0].text
+# 
+#         # Clean JSON block formatting
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#          # Attempt to parse as JSON
+#         parsed = json.loads(content_clean)
+# 
+#         # Append respondent_id
+#         parsed["respondent_id"] = row["respondent_id"]
+# 
+#         # Add to results list
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         print(f"❌ Error en fila {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     time.sleep(1.5)
+# 
+# # Save as Excel file
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv3_claude.xlsx", index=False)
+# 
+# print("✅ Proceso completado. Resultados guardados en 'promptv3_claude.xlsx'")
+```
+
+```{r}
+promptv3_claude<- readxl::read_excel("data/output/promptv3_claude.xlsx")
+```
+
+#### 5.3.3 Mistral 7B
+
+```{r}
+# reticulate::py_install("requests")
+```
+
+```{python}
+import os
+import pandas as pd
+import json
+import time
+import requests
+
+# Mistral API setting
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+API_URL = "https://api.mistral.ai/v1/chat/completions"
+HEADERS = {
+    "Authorization": f"Bearer {MISTRAL_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+MODEL = "mistral-large-2402"  
+
+df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
+```
+
+```{python}
+# # Store the results
+# results = []
+# 
+# # Loop through each row
+# for idx, row in df.iterrows():
+#     # Format the prompt using your prompt_v1 template
+#     try:
+#         prompt = prompt_v3.format(
+#             respondent_id=row["respondent_id"],
+#             brand=row["brand"],
+#             awareness_audio=row["awareness_audio"],
+#             main_audio=row["main_audio"]
+#         )
+# 
+#         payload = {
+#             "model": MODEL,
+#             "messages": [
+#                 {"role": "user", "content": prompt}
+#             ],
+#             "temperature": 0.3,
+#             "max_tokens": 1024
+#         }
+# 
+#         response = requests.post(API_URL, headers=HEADERS, json=payload)
+#         response.raise_for_status()
+#         data = response.json()
+# 
+#         # Extract model response content
+#         content = data["choices"][0]["message"]["content"]
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#         # Try parsing as JSON
+#         parsed = json.loads(content_clean)
+#         parsed["respondent_id"] = row["respondent_id"]
+# 
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         print(f"❌ Error on row {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     # Respect rate limit (adjust as needed)
+#     time.sleep(1.5)
+# 
+# # Save to Excel file
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv3_mistral.xlsx", index=False)
+# 
+# print("✅ Process completed. Results saved to 'promptv3_mistral.xlsx'")
+
+```
+
+```{r}
+promptv3_mistral<- readxl::read_excel("data/output/promptv3_mistral.xlsx")
+```
+
+#### 5.3.4 Join the results
+
+```{r}
+promptv3_gpt1 <- add_suffix(promptv3_gpt, "promptv3_gpt")
+promptv3_claude1 <- add_suffix(promptv3_claude, "promptv3_claude")
+promptv3_mistral1 <- add_suffix(promptv3_mistral, "promptv3_mistral")
+
+# Make sure the ids are numeric instead of characters
+promptv3_gpt1 <- promptv3_gpt1 |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+
+promptv3_claude1 <- promptv3_claude1 |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+
+promptv3_mistral1 <- promptv3_mistral1 |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+```
+
+```{r}
+tidy_join_transcript7<- tidy_join_transcript6 |> 
+  inner_join(promptv3_gpt1,by="respondent_id") |> 
+  inner_join(promptv3_claude1,by="respondent_id") |> 
+  inner_join(promptv3_mistral1,by="respondent_id") 
+readr::write_csv(tidy_join_transcript7, "data/intermediate/tidy_join_transcript7.csv")
+```
+
+### 5.4 Prompt v4
+
+#### 5.4.1 GPT 4o
+
+```{python}
+# Read OpenAI API key from environment variable (injected from R via reticulate)
+import os
+import openai
+from openai import OpenAI
+import time
+import pandas as pd
+import openpyxl
+import json
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is not set or empty")
+
+client = OpenAI(api_key=api_key)
+# Read the CSV input file
+input_path = "data/intermediate/tidy_join_transcript4.csv"
+df = pd.read_csv(input_path)
+```
+
+```{python}
+# # Store all results (one per respondent)
+# results = []
+# # Loop through each row of the dataset (each respondent)
+# for idx, row in df.iterrows():
+#     # Format the prompt with respondent-specific content
+#     prompt = prompt_v4.format(
+#         respondent_id=row["respondent_id"],
+#         brand=row["brand"],
+#         awareness_audio=row["awareness_audio"],
+#         main_audio=row["main_audio"]
+#     )
+#     try:
+#         # Send request to GPT-4o model
+#         response = client.chat.completions.create(
+#             model="gpt-4o",
+#             messages=[{"role": "user", "content": prompt}],
+#             temperature=0.3,  # Lower temperature for consistent output
+#             max_tokens=500    # Limit response length to 500 tokens
+#         )
+# 
+#         # Extract the model's response content
+#         content = response.choices[0].message.content
+# 
+#         # Remove code block formatting to prepare for JSON parsing
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#         # Parse the JSON response
+#         parsed = json.loads(content_clean)
+# 
+#         # Append the parsed result to the results list
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         # Catch any errors, print them, and store in the results list
+#         print(f"Error en fila {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     # Sleep 1.5 seconds to respect OpenAI rate limits
+#     time.sleep(1.5)
+# 
+# # Convert results to DataFrame and save as Excel file (make sure 'openpyxl' is installed)
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv4_gpt.xlsx", index=False)
+# 
+# # Print confirmation message
+# print("✅ Proceso completado. Resultados guardados en 'promptv4_gpt.xlsx'")
+```
+
+```{r}
+promptv4_gpt<- readxl::read_excel("data/output/promptv4_gpt.xlsx")
+```
+
+#### 5.4.2 Claude 3 Sonnet
+
+```{python}
+import os
+import pandas as pd
+import anthropic
+import json
+import time
+
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
+```
+
+```{python}
+# results = []
+# 
+# for idx, row in df.iterrows():
+#     prompt = prompt_v4.format(
+#         respondent_id=row["respondent_id"],
+#         brand=row["brand"],
+#         awareness_audio=row["awareness_audio"],
+#         main_audio=row["main_audio"]
+#     )
+# 
+#     try:
+#         # call Claude 3 Sonnet
+#         response = client.messages.create(
+#             model="claude-3-5-sonnet-20240620",
+#             max_tokens=1024,
+#             temperature=0,
+#             messages=[{"role": "user", "content": prompt}]
+#         )
+# 
+#         # Get plain text content
+#         content = response.content[0].text
+# 
+#         # Clean JSON block formatting
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#          # Attempt to parse as JSON
+#         parsed = json.loads(content_clean)
+# 
+#         # Append respondent_id
+#         parsed["respondent_id"] = row["respondent_id"]
+# 
+#         # Add to results list
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         print(f"❌ Error en fila {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     time.sleep(1.5)
+# 
+# # Save as Excel file
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv4_claude.xlsx", index=False)
+# 
+# print("✅ Proceso completado. Resultados guardados en 'promptv4_claude.xlsx'")
+```
+
+```{r}
+promptv4_claude<- readxl::read_excel("data/output/promptv4_claude.xlsx")
+```
+
+#### 5.4.3 Mistral 7B
+
+```{python}
+import os
+import pandas as pd
+import json
+import time
+import requests
+
+# Mistral API setting
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+API_URL = "https://api.mistral.ai/v1/chat/completions"
+HEADERS = {
+    "Authorization": f"Bearer {MISTRAL_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+MODEL = "mistral-large-2402"  
+
+df = pd.read_csv("data/intermediate/tidy_join_transcript4.csv")
+```
+
+```{python}
+# # Store the results
+# results = []
+# 
+# # Loop through each row
+# for idx, row in df.iterrows():
+#     # Format the prompt using your prompt_v1 template
+#     try:
+#         prompt = prompt_v4.format(
+#             respondent_id=row["respondent_id"],
+#             brand=row["brand"],
+#             awareness_audio=row["awareness_audio"],
+#             main_audio=row["main_audio"]
+#         )
+# 
+#         payload = {
+#             "model": MODEL,
+#             "messages": [
+#                 {"role": "user", "content": prompt}
+#             ],
+#             "temperature": 0.3,
+#             "max_tokens": 1024
+#         }
+# 
+#         response = requests.post(API_URL, headers=HEADERS, json=payload)
+#         response.raise_for_status()
+#         data = response.json()
+# 
+#         # Extract model response content
+#         content = data["choices"][0]["message"]["content"]
+#         content_clean = content.replace("```json", "").replace("```", "").strip()
+# 
+#         # Try parsing as JSON
+#         parsed = json.loads(content_clean)
+#         parsed["respondent_id"] = row["respondent_id"]
+# 
+#         results.append(parsed)
+# 
+#     except Exception as e:
+#         print(f"❌ Error on row {idx} (ID {row['respondent_id']}): {e}")
+#         results.append({
+#             "respondent_id": row["respondent_id"],
+#             "error": str(e)
+#         })
+# 
+#     # Respect rate limit (adjust as needed)
+#     time.sleep(1.5)
+# 
+# # Save to Excel file
+# results_df = pd.DataFrame(results)
+# results_df.to_excel("data/output/promptv4_mistral.xlsx", index=False)
+# 
+# print("✅ Process completed. Results saved to 'promptv4_mistral.xlsx'")
+
+```
+
+```{r}
+promptv4_mistral<- readxl::read_excel("data/output/promptv4_mistral.xlsx")
+```
+
+#### 5.4.4 Join the results
+
+```{r}
+promptv4_gpt1 <- add_suffix(promptv4_gpt, "promptv4_gpt")
+promptv4_claude1 <- add_suffix(promptv4_claude, "promptv4_claude")
+promptv4_mistral1 <- add_suffix(promptv4_mistral, "promptv4_mistral")
+
+# Make sure the ids are numeric instead of characters
+promptv4_gpt1 <- promptv4_gpt1 |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+
+promptv4_claude1 <- promptv4_claude1 |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+
+promptv4_mistral1 <- promptv4_mistral1 |> 
+  mutate(respondent_id = as.numeric(respondent_id))
+```
+
+```{r}
+tidy_join_transcript8<- tidy_join_transcript7 |> 
+  inner_join(promptv4_gpt1,by="respondent_id") |> 
+  inner_join(promptv4_claude1,by="respondent_id") |> 
+  inner_join(promptv4_mistral1,by="respondent_id") 
+readr::write_csv(tidy_join_transcript8, "data/intermediate/tidy_join_transcript8.csv")
+```
+
+### 5.5 Performance Evaluation of Prompt Versions (v1–v4)
+
+Before proceeding to prompt version v5, I evaluate and compare the
+performance of prompt versions v1, v2, v3, and v4 across the three
+selected LLMs. The evaluation focuses on the following aspects:
+
+1.  **Rule Compliance**\
+    Whether the model outputs adhere to explicit constraints stated in
+    the prompts (e.g., avoiding unsupported or non-compliant answers).
+
+2.  **Performance Metrics**\
+    To quantify the alignment between model predictions and manual
+    annotations (Likert scale 1–7), I compute:
+
+    -   **Mean Absolute Error (MAE)**: Measures average deviation.
+    -   **Spearman’s rank correlation coefficient (ρ)**: Evaluates the
+        monotonic relationship between predicted and human-annotated
+        rankings.
+    -   **One-Off Accuracy**: Percentage of predictions within ±1 point
+        of the ground truth.
+
+3.  **Statistical Significance Testing**\
+    I test whether the differences in performance among prompt versions
+    and across LLMs are statistically significant. Appropriate tests
+    (e.g., paired t-test, Wilcoxon signed-rank test, or Two-way ANOVA)
+    are applied based on data characteristics such as normality and
+    repeated measures.
+
+#### 5.5.1 **Rule Compliance**
+
+In this section, I mainly focused on the no compliant values like
+non-numeric data and integers below 1 or above 7.
+
+```{r}
+# Step 1: Get all model-generated index columns from prompt v1–v4
+
+index_cols <- grep("^(awareness|sentiment|differentiation)_promptv[1-4]_",
+                   names(tidy_join_transcript8), value = TRUE)
+
+# Step 2: Pivot the selected columns to long format and extract index, prompt version, and model name
+
+df_long_all <- tidy_join_transcript8 %>%
+  select(respondent_id, all_of(index_cols)) %>%
+  pivot_longer(cols = -respondent_id,
+               names_to = "index_prompt_modelo",
+               values_to = "output") %>%
+  mutate(
+    index = str_extract(index_prompt_modelo, "^(awareness|sentiment|differentiation)"),  
+    prompt = str_extract(index_prompt_modelo, "promptv\\d"),                              
+    modelo = str_extract(index_prompt_modelo, "(gpt|claude|mistral)")                    
+  )
+```
+
+```{r}
+# Step 3: Define rule violations and compute summary statistics
+
+df_long_all <- df_long_all %>%
+  mutate(
+    output_num = as.numeric(output),                                  
+    violacion = is.na(output_num) | output_num < 1 | output_num > 7  
+  )
+
+df_violaciones_all <- df_long_all %>%
+  group_by(index, prompt, modelo) %>%
+  summarise(
+    n_total = n(),                                  
+    n_violaciones = sum(violacion),                 
+    porcentaje = round(100 * n_violaciones / n_total, 1),  # % of non compliance
+    .groups = "drop"
+  )
+
+```
+
+```{r}
+# Step 4: Visualize violations by index, prompt, and model
+
+gt_table <- df_violaciones_all %>%
+  arrange(index, prompt, modelo) %>%  # Sort by index, prompt, model / 排序
+  gt(rowname_col = NULL) %>%
+  cols_label(
+    index = "Index",                                 
+    prompt = "Prompt Version",                       
+    modelo = "Model",                               
+    n_total = "Total Outputs",                       
+    n_violaciones = "Violations",                    
+    porcentaje = "Violation Rate (%)"                
+  ) %>%
+  fmt_number(columns = porcentaje, decimals = 1) %>%  
+  tab_header(
+    title = md("**Rule Compliance by Index, Prompt Version, and Model**"),  
+    subtitle = "Outputs outside the 1–7 Likert range or non-numeric entries are counted as violations."
+  ) %>%
+  tab_caption(
+    caption = "Source: Yijia's analysis based on LLM predictions and manually annotated survey responses"
+  ) %>%
+  cols_align(align = "center", columns = everything()) %>%  
+  tab_options(
+    table.font.size = 12,              
+    heading.title.font.size = 14,       
+    heading.subtitle.font.size = 11,    
+    table.width = pct(100)              
+  )
+gt_table
+gtsave(gt_table, "figures/figure5_rule_compliance_table.png")
+```
+
+```{r}
+p <- ggplot(df_violaciones_all, aes(x = prompt, y = porcentaje, fill = modelo)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.6) +
+  geom_text(
+    aes(label = paste0(n_violaciones, "/", n_total)),
+    position = position_dodge(width = 0.8),
+    vjust = -0.4, size = 2  #  Slightly smaller text labels
+  ) +
+  facet_wrap(~index) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    y = "Violation Rate (%)",
+    x = "Prompt Version",
+    fill = "Model"
+  ) +
+  theme_minimal(base_size = 10) +  # Reduce overall font size
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8), 
+    axis.text.y = element_text(size = 8),                         
+    legend.position = "bottom",
+    legend.text = element_text(size = 8),                       
+    strip.text = element_text(size = 9, face = "bold"),          
+    plot.title = element_blank()
+  )
+p
+save_my_plot(p, "figure6_violation rate.png")
+```
+
+```{r}
+# Label type of violation
+df_violation_details <- df_long_all %>%
+  filter(violacion == TRUE) %>%  # Only keep violations
+  mutate(
+    error_type = case_when(
+      is.na(output) ~ "missing value",                     
+      suppressWarnings(is.na(as.numeric(output))) ~ "non-numeric value",  
+      as.numeric(output) < 1 ~ "out of range (<1)",        
+      as.numeric(output) > 7 ~ "out of range (>7)",        
+      TRUE ~ "unknown"                                     
+    )
+  ) %>%
+  select(respondent_id, index, prompt, modelo, output, error_type)  
+
+gt_table <- df_violation_details %>%
+  gt() %>%
+  tab_header(
+    title = md("**Details of Invalid Model Outputs**"),
+    subtitle = "Only responses violating the Likert range (1–7) or format constraints are shown."
+  ) %>%
+  cols_label(
+    respondent_id = "Respondent ID",
+    index = "Index",
+    prompt = "Prompt Version",
+    modelo = "Model",
+    output = "Output",
+    error_type = "Error Type"
+  ) %>%
+  tab_options(table.font.size = 11)
+```
+
+```{r}
+gt_table
+gtsave(gt_table, "figures/figure7_noncompliance_detailes_table.png")
+```
+
+The rule compliance evaluation reveals significant variations in output
+validity depending on prompt design and model architecture. **Promptv1**
+and **promptv2**, both designed with minimal or direct instructions,
+achieved full compliance across all three LLMs, with zero violations
+observed. However, the introduction of **Open Chain-of-Thought reasoning
+in promptv3** resulted in a dramatic increase in invalid outputs —
+especially for **Claude**, which frequently generated out-of-range
+values such as 8 or 9 on a Likert scale bounded at 7. In the *awareness*
+index alone, Claude exhibited a violation rate of over **80%** under
+promptv3. Surprisingly, even **GPT-4** and **Mistral**, which had
+previously shown perfect compliance, produced isolated violations under
+promptv3.
+
+**Promptv4**, which implemented a **Guided Chain-of-Thought strategy**,
+demonstrated a partial recovery in output stability. While still more
+error-prone than v1 and v2, the guided format led to a **moderate
+reduction in violations** compared to v3 across all models, suggesting
+that **structured reasoning cues can help mitigate format instability**.
+GPT-4 and Mistral remained largely robust under promptv4, with only
+occasional errors, whereas Claude continued to show format sensitivity.
+
+These findings highlight a critical trade-off in prompt engineering:
+**more interpretive prompts (e.g., open CoT) may enhance reasoning
+quality but reduce compliance with output constraints**. In contrast,
+**guided prompts** offer a middle ground, balancing reasoning support
+with structural discipline. For tasks requiring strict numerical formats
+(e.g., survey ratings), prompt simplicity and boundary alignment appear
+essential for output reliability — especially when using models like
+Claude, which are more susceptible to over-generation and prompt
+ambiguity.
+
+**As prompts become more complex and require models to “think before
+responding**, it becomes increasingly important to **not only include
+constraints, but to phrase them with unambiguous and firm language** —
+particularly for models such as Claude, which demonstrate high
+sensitivity to soft instructions or implicit boundaries.
+
+#### 5.5.2 **Performance Metrics**
+
+```{r}
+
+# Step 1:  Define dimensions and result storage
+indexes <- c("awareness", "sentiment", "differentiation")
+
+# Empty tibble to collect results
+results_all <- tibble(
+  PromptVersion = character(),
+  Model = character(),
+  Index = character(),
+  MAE = numeric(),
+  Spearman = numeric(),
+  OneOffAcc = numeric()
+)
+
+# Step 2:  Load data
+tidy_join_transcript8 <- readr::read_csv("data/intermediate/tidy_join_transcript8.csv")
+
+# Step 3:  Loop through indexes and prediction columns
+for (ix in indexes) {
+  pred_cols <- colnames(tidy_join_transcript8)[str_starts(colnames(tidy_join_transcript8), ix)]
+  
+  for (col in pred_cols) {
+    if (col == ix || str_detect(col, "index_base")) next  #  skip truth & baseline
+    
+    pred <- tidy_join_transcript8[[col]]
+    truth <- tidy_join_transcript8[[ix]]
+    
+    # Extract prompt and model
+    matches <- str_match(col, paste0(ix, "_prompt(v\\d+)_(\\w+)"))
+    
+    # Skip malformed columns
+    if (is.na(matches[1, 2]) || is.na(matches[1, 3])) {
+      warning(paste("skip due to column name format:", col))
+      next
+    }
+    
+    prompt_version <- matches[1, 2]        # "v1" to "v4"
+    model_name <- str_to_title(matches[1, 3])  # "gpt" -> "Gpt"
+
+    if (model_name == "Gpt") model_name <- "GPT"
+    
+    # Step 4:  Use the evaluation function
+    eval_result <- evaluate_model(pred, truth)
+    
+    # Step 5: Append new result
+    results_all <- add_row(results_all,
+                           PromptVersion = prompt_version,
+                           Model = model_name,
+                           Index = ix,
+                           !!!as.list(eval_result))
+  }
+}
+
+```
+
+```{r}
+results_prompt_gt <- results_all %>%
+  arrange(Index, PromptVersion, Model) %>%
+  gt(rowname_col = "Model", groupname_col = "Index") %>%
+  fmt_number(columns = c(MAE, Spearman, OneOffAcc), decimals = 3) %>%
+  fmt_percent(columns = OneOffAcc, scale_values = FALSE, decimals = 1) %>%
+  tab_header(
+    title = md("**Model Evaluation by Prompt Version and LLM**"),
+    subtitle = "Performance across awareness, sentiment, and differentiation using MAE, Spearman ρ, and One-Off Accuracy"
+  ) %>%
+  cols_label(
+    PromptVersion = "Prompt Version",
+    MAE = "MAE",
+    Spearman = "Spearman ρ",
+    OneOffAcc = "One-Off Accuracy (%)"
+  ) %>%
+  tab_source_note(
+    source_note = "Source: Yijia's analysis based on LLM predictions and manually annotated survey responses (N = 35)"
+  ) %>%
+  tab_options(
+    table.font.size = "small",
+    heading.title.font.size = 14,
+    heading.subtitle.font.size = 12,
+    row.striping.include_table_body = TRUE
+  )
+results_prompt_gt
+```
+
+```{r}
+save_my_table(results_prompt_gt, "figure8_prompt_model_performance.png")
+```
+
+##### Global PCA (Pooled PCA across all index dimensions)
+
+As there are so many indexes, models, prompts and metrics, it seems
+complicated to compare the results. Therefore, I added a PCA analysis to
+the table:
+
+```{r}
+pca_data <- results_all %>%
+  mutate(OneOffAcc = OneOffAcc / 100) %>%  
+  select(MAE, Spearman, OneOffAcc) %>%
+  scale()  
+pca_result <- prcomp(pca_data, center = TRUE, scale. = TRUE)
+summary(pca_result)
+pca_result$rotation
+```
+
+`pca_result$rotation` shows that this time PC1 is defined in the same
+direction of the metrics (lower MAE, higher Spearman and OneOffAcc means
+higher PCA), so, there is no need to change the signal of PC1 here.
+
+```{r}
+results_pca <- results_all %>%
+  mutate(PC1 = pca_result$x[, 1]) %>%
+  arrange(desc(PC1))
+p <- results_pca %>%
+  mutate(label = paste(Model, PromptVersion, Index, sep = " - ")) %>%
+  ggplot(aes(x = reorder(label, PC1), y = PC1, fill = Model)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "PCA-based Overall Performance Ranking",
+    x = "",
+    y = "PC1 Score (Composite Performance)"
+  ) +
+  theme_minimal(base_size = 11)
+p
+save_my_plot(p, "figure9_results_pca.png")
+```
+
+It is important to notice in the plot above that, although the same
+prompt-model pair appears multiple times in the chart (e.g., GPT-v2),
+each entry represents a different evaluation index (awareness,
+sentiment, or differentiation), with its own set of metrics. Therefore,
+PCA was applied globally across all 36 prompt-model-index combinations,
+and it is fair to compare the performance for all indexes in one table.
+
+The Global PCA-based ranking shows that sentiment is consistently easier
+for all models to handle, with Claude-v2, GPT-v1, and Mistral-v2 ranking
+highest overall. In contrast, awareness appears to be the most difficult
+index, particularly under prompt v3, where all three models suffer a
+dramatic drop in performance. Notably, Claude-v3 ranks last across
+multiple dimensions, confirming that open-ended reasoning prompts can
+severely reduce output quality unless tightly controlled. GPT exhibits
+the most stable performance across prompts, with v1 and v2 yielding
+particularly strong results.
+
+##### Group-wise PCA by index
+
+Considered the general patterns of performance, now let's do a
+group-wise PCA by index to help us to compare the performance within
+each index.
+
+```{r}
+pca_loadings_by_index <- results_all %>%
+  group_split(Index) %>%
+  map_df(~ {
+    index_name <- unique(.x$Index)
+
+    df_metrics <- .x[, c("MAE", "Spearman", "OneOffAcc")]
+
+    pca_result <- prcomp(scale(df_metrics), center = TRUE, scale. = TRUE)
+
+    tibble(
+      Index = index_name,
+      Metric = rownames(pca_result$rotation),
+      Loading_PC1 = pca_result$rotation[, 1]
+    )
+  })
+
+pca_loadings_by_index
+```
+
+It shows that here PC1 for MAE is positive and for Spearman / OneOffAcc
+is negative, in the opposite way of the common sense. Therefore, it's
+important to change the signal of PCA to understand it better.
+
+```{r}
+# Do PCA within each Index group and flip PC1 direction
+results_all_pca <- results_all %>%
+  group_by(Index) %>%
+  mutate(
+    # change the direction of PCA
+    PC1 = -prcomp(scale(cbind(MAE, Spearman, OneOffAcc)))$x[, 1]
+  ) %>%
+  ungroup() %>%
+  arrange(Index, desc(PC1))  # Sort by descending (flipped) PC1
+
+# Step 2:  Format as gt table
+results_prompt_gt_pca <- results_all_pca %>%
+  gt(rowname_col = "Model", groupname_col = "Index") %>%
+  fmt_number(columns = c(MAE, Spearman, OneOffAcc, PC1), decimals = 3) %>%
+  fmt_percent(columns = OneOffAcc, scale_values = FALSE, decimals = 1) %>%
+  tab_header(
+    title = md("**Model Evaluation by Prompt Version and LLM (Ranked by PCA)**"),
+    subtitle = "Performance across awareness, sentiment, and differentiation using MAE, Spearman ρ, One-Off Accuracy, and PCA-based composite score"
+  ) %>%
+  cols_label(
+    PromptVersion = "Prompt Version",
+    MAE = "MAE",
+    Spearman = "Spearman ρ",
+    OneOffAcc = "One-Off Accuracy (%)",
+    PC1 = "PCA Score"
+  ) %>%
+  tab_source_note(
+    source_note = "Source: Yijia's analysis based on LLM predictions and manually annotated survey responses (N = 35)"
+  ) %>%
+  tab_options(
+    table.font.size = "small",
+    heading.title.font.size = 14,
+    heading.subtitle.font.size = 12,
+    row.striping.include_table_body = TRUE
+  )
+
+# Step 3:  Save the PCA ranking table
+save_my_table(results_prompt_gt_pca, "figure10_results_prompt_pca_by_index.png")
+
+# Step 4:  Show the table
+results_prompt_gt_pca
+
+```
+
+This section presents an in-depth interpretation of the group-wise PCA
+results derived from the three evaluation dimensions: awareness,
+differentiation, and sentiment. Each PCA was computed independently per
+index, based on three performance metrics: Mean Absolute Error (MAE),
+Spearman's rank correlation coefficient (ρ), and One-Off Accuracy. The
+resulting principal component (PC1) was adjusted such that higher values
+denote better overall performance, i.e., lower MAE, higher correlation
+with ground truth, and higher proximity to human annotations.
+
+In the awareness dimension, models such as GPT and Mistral, when paired
+with structured prompts (notably v1 and v2), demonstrated strong
+performance. Claude, however, struggled with rule compliance and output
+consistency, particularly when paired with more open-ended prompts like
+v3 and v4. This pattern is likely due to Claude’s higher generative
+freedom and its tendency to deviate from numerical constraints under
+loosely defined instructions. Previous evaluations of Claude have shown
+that its strength lies in conversational and contextual tasks, but it
+often generates verbose or out-of-format responses when not explicitly
+guided (Zhou et al., 2023; Anthropic, 2023). By contrast, GPT-4 is
+designed for robust instruction-following and performs reliably on
+structured, numeric tasks (OpenAI, 2023).
+
+In the differentiation dimension, Claude achieved the highest PCA scores
+when used with minimal yet focused prompts (v1 and v2). Differentiation
+questions involve judgment of brand distinctiveness, which may leverage
+Claude’s relative strengths in contextual reasoning and abstract
+interpretation. However, Claude's performance declined substantially
+with v3 and v4, which incorporated elements of chain-of-thought
+prompting. This finding echoes existing research showing that while
+chain-of-thought prompts enhance reasoning, they may introduce higher
+variance and hallucinations if not tightly constrained (Wei et al.,
+2022; Liu et al., 2023). GPT's performance remained consistent across
+all prompt types, showing stability under both minimal and guided
+prompts.
+
+In the sentiment dimension, all three LLMs performed relatively well,
+but Claude stood out, particularly under prompt v2. Sentiment evaluation
+benefits from prompts that balance interpretive freedom with sufficient
+guidance—a format best captured by v2. Claude’s optimization for
+empathetic and context-rich interpretation likely plays a role in this
+advantage (Anthropic, 2023). GPT again proved reliable, especially with
+v1 and v2, while Mistral showed moderate performance, occasionally
+hampered by its lighter architecture and reduced context comprehension
+(Mistral AI, 2023).
+
+Overall, the group-wise PCA results demonstrate that model performance
+is not only dependent on the LLM but also highly sensitive to prompt
+design. Structured prompts like v2 yield robust results across all
+dimensions. Meanwhile, open-ended or reasoning-heavy prompts (e.g., v3
+and v4) tend to destabilize Claude, highlighting the necessity of strict
+output formatting in such cases. These insights reinforce the growing
+consensus that prompt engineering must be adapted to both model
+architecture and task nature (Zhou et al., 2023; Liu et al., 2023).
+
+##### Group-wise PCA by LLM model
+
+```{r}
+# Step 1:  Aggregate metrics per prompt-model pair
+results_model_summary <- results_all %>%
+  group_by(Model, PromptVersion) %>%
+  summarise(
+    MAE = mean(MAE, na.rm = TRUE),
+    Spearman = mean(Spearman, na.rm = TRUE),
+    OneOffAcc = mean(OneOffAcc, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Step 2: Group-wise PCA by Model
+results_model_pca <- results_model_summary %>%
+  group_by(Model) %>%
+  mutate(
+    PC1 = prcomp(scale(cbind(MAE, Spearman, OneOffAcc)))$x[, 1] * (-1)  
+  ) %>%
+  ungroup() %>%
+  arrange(Model, desc(PC1))  
+
+# Step 3: make the gt table
+results_model_gt <- results_model_pca %>%
+  gt(rowname_col = "PromptVersion", groupname_col = "Model") %>%
+  fmt_number(columns = c(MAE, Spearman, OneOffAcc, PC1), decimals = 3) %>%
+  fmt_percent(columns = OneOffAcc, scale_values = FALSE, decimals = 1) %>%
+  tab_header(
+    title = md("**Prompt Ranking within Each LLM (Aggregated Across All Tasks)**"),
+    subtitle = "PCA-based performance ranking across awareness, sentiment, and differentiation"
+  ) %>%
+  cols_label(
+    MAE = "MAE",
+    Spearman = "Spearman ρ",
+    OneOffAcc = "One-Off Accuracy (%)",
+    PC1 = "PCA Score"
+  ) %>%
+  tab_source_note(
+    source_note = "Source: Yijia's analysis based on model predictions and manual annotations (aggregated)"
+  ) %>%
+  tab_options(
+    table.font.size = "small",
+    heading.title.font.size = 14,
+    heading.subtitle.font.size = 12
+  )
+
+
+results_model_gt
+save_my_table(results_model_gt, "figure11_modelwise_prompt_ranking_aggregated.png")
+
+```
+
+When aggregating performance across all three evaluation
+dimensions—awareness, differentiation, and sentiment—the PCA-based
+analysis reveals distinct patterns in prompt suitability for each large
+language model (LLM).
+
+For **Claude**, prompt v2 achieves the highest overall PCA score
+(1.268), followed closely by v1 (1.156), while prompts v3 and v4 perform
+substantially worse, with PCA scores of –1.448 and –0.976, respectively.
+This suggests that Claude is particularly sensitive to prompt structure:
+while it performs well under concise and moderately guided prompts (v1
+and v2), its performance deteriorates when faced with more open-ended or
+reasoning-oriented formulations like v3 and v4. This finding is
+consistent with earlier observations that Claude tends to generate
+verbose or unconstrained outputs if not clearly instructed (Anthropic,
+2023; Zhou et al., 2023).
+
+In contrast, **GPT** demonstrates more robust behavior. Its
+best-performing prompt is v1 (PCA = 1.570), followed by v2 and v4 with
+relatively stable scores (0.511 and 0.349, respectively). Even with v3,
+where performance drops sharply (–2.429), the model's accuracy and
+correlation metrics remain within reasonable bounds. GPT’s resilience
+across prompt types aligns with findings from OpenAI (2023), which
+describe GPT-4 as particularly strong in instruction-following and
+format-constrained tasks.
+
+**Mistral** exhibits the clearest preference among all models: prompt v2
+yields a significantly higher PCA score (2.144) compared to other
+prompts. The rest (v1, v3, v4) all fall below zero, indicating lower
+effectiveness. This suggests that Mistral benefits most from *light but
+explicit guidance*, a format captured well by v2, which balances
+instruction with flexibility. Prompts v3 and v4, in contrast, appear too
+speculative or under-specified for Mistral’s architecture, consistent
+with the model’s known performance drop in multi-step reasoning tasks
+(Mistral AI, 2023).
+
+Importantly, these PCA findings are corroborated by the **One-Off
+Accuracy** results. Since the ground truth scores were self-reported by
+respondents using a 1–7 Likert scale, the evaluation task reflects not
+third-party interpretation, but an attempt to reconstruct the
+respondent’s personal brand perception. In this context, One-Off
+Accuracy—defined as the percentage of model outputs within ±1 of the
+ground truth—serves as a practical proxy for usability. Prior research
+indicates that even human raters tend to agree within this margin around
+75–85% of the time (Bang et al., 2023; Zhou et al., 2022), and LLM
+benchmarks often treat 80% as a threshold for reliable alignment
+(OpenAI, 2023). In the present case, GPT (v1) and Claude (v2) both
+exceed this threshold (84.3% and 82.4%, respectively), supporting their
+reliability for real-world inference. Mistral (v2) achieves a lower
+score of 76.9%, which, while close, falls slightly short of the commonly
+accepted standard for automatic judgment replication.
+
+Overall, these results support two general conclusions. First, prompt v2
+appears to be the **most consistently effective formulation across all
+models**, offering a good balance between structure and autonomy.
+Second, **each LLM has unique sensitivities to prompt types**: Claude
+requires clearer constraints to avoid invalid or verbose outputs, GPT
+performs reliably across formats and excels with structured
+instructions, and Mistral is highly responsive to concise guidance but
+less robust when facing reasoning-heavy or loosely specified prompts.
+
+### 5.6 Prompt v5
+
+In this final stage of prompt engineering, I improved the most suitable
+prompt for each of the LLM models using meta-prompting. Let's test if
+the performance is better when the prompt is "personalized" for each LLM
+model.
+
+#### 5.6.1 **Prompt Generation (Meta-prompting) + Model-Specific Prompt Engineering**
+
+So far, we concluded that the best prompt for Claude and Mistral is v2,
+and for GPT is v1. Based on this, I required each of the LLM model to
+prepare a new version of prompt by improving the most suitable prompt
+before.
+
+```{python}
+prompt_to_improve_v1 = (
+    "Eres un experto en ingeniería de prompts.\n\n"
+    
+    "A continuación se muestra el prompt que actualmente usamos contigo para evaluar respuestas habladas. "
+    "Este prompt sirve para que analices el testimonio de un hablante sobre una marca bancaria, y asignes valores numéricos (del 1 al 7) a cuatro dimensiones: awareness, sentiment, differentiation y overall.\n\n"
+    
+    "Objetivo: queremos que generes una **versión mejorada del prompt**, específicamente diseñada para que tú (como modelo) puedas **comprender mejor las instrucciones, mantener la consistencia en los outputs y producir resultados más fiables y útiles para clasificación automática**.\n\n"
+    
+    "Por favor, devuelve solamente el nuevo prompt mejorado, sin explicaciones ni comentarios.\n\n"
+    
+    "--- Prompt actual:\n"
+    
+    "Analiza el siguiente testimonio hablado en dos partes. "
+    "Evalúa la percepción de marca del hablante asignando un valor numérico entre 1 y 7 en las siguientes dimensiones: awareness, sentiment, differentiation y overall.\n\n"
+    
+    "La marca que se le ha asignado al hablante es: {brand}.\n\n"
+    
+    "Contexto de las preguntas realizadas al hablante:\n"
+    "Fragmento 1 (awareness_audio) corresponde a la siguiente pregunta:\n"
+    "> “¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?”\n"
+    "Fragmento 2 (main_audio) corresponde a las siguientes tres preguntas sobre la marca asignada ({brand}):\n"
+    "> 1. ¿Qué te hace sentir {brand}?\n"
+    "> 2. ¿En qué aspectos crees que {brand} se diferencia de otras compañías bancarias?\n"
+    "> 3. Finalmente, ¿qué opinas de la imagen de marca de {brand}?\n\n"
+    
+    "Fragmento 1 (awareness_audio):\n"
+    "\"{awareness_audio}\"\n\n"
+    "Fragmento 2 (main_audio):\n"
+    "\"{main_audio}\"\n\n"
+    
+    "Formato de salida (JSON):\n"
+    "{\n"
+    "  \"respondent_id\": \"{respondent_id}\",\n"
+    "  \"awareness\": valor,\n"
+    "  \"sentiment\": valor,\n"
+    "  \"differentiation\": valor,\n"
+    "  \"overall\": valor\n"
+    "}\n\n"
+    
+    "Devuelve solo el JSON, sin explicaciones adicionales."
+)
+```
+
+```{python}
+prompt_to_improve_v2 = (
+    "Eres un experto en ingeniería de prompts.\n\n"
+    
+    "A continuación se muestra el prompt que actualmente usamos contigo para evaluar testimonios hablados. "
+    "Este prompt incluye ejemplos concretos con inputs y outputs en formato JSON. "
+    "Tu tarea es generar una **versión mejorada del prompt**, específicamente diseñada para que tú (como modelo) puedas "
+    "**comprender mejor las instrucciones, mantener la consistencia en los outputs y producir resultados más útiles para clasificación automática**.\n\n"
+    
+    "Por favor, devuelve solamente el nuevo prompt mejorado, sin explicaciones ni comentarios.\n\n"
+    
+    "--- Prompt actual:\n"
+    
+    "A continuación tienes dos ejemplos de cómo evaluar testimonios sobre una marca asignada.\n"
+    "Para cada ejemplo, se presenta un fragmento 1 (para awareness y overall) y un fragmento 2 (para sentiment, differentiation y overall), seguidos de una salida en formato JSON.\n\n"
+
+    "### Ejemplo 1:\n"
+    "Marca asignada: CaixaBank\n\n"
+    "Fragmento 1:\n"
+    "\"¿Cuáles son los tres o cinco pangos que más escuchas en tu día a día? Pues Sanander, BBVA, ING, Hipercaja y CaixaBank.\"\n\n"
+    "Fragmento 2:\n"
+    "\"¿Qué te hace sentir CaixaBank? Pues no lo sé la verdad porque no tengo cuenta y mis amigos tampoco tienen cuenta en CaixaBank. Pues no lo sé la verdad. ¿En qué aspecto crees que CaixaBank se diferencia de otras compañías bancarias? Pues como no lo conozco muy bien, pues tampoco sé. Finalmente, ¿qué opinas de la imagen de marca de CaixaBank? Pues a ver, creo que es una empresa bastante grande, ¿no? Aunque bueno, siento Santander como el primer banco de España, pero bueno, aún así también es un banco potente. Y respecto a imagen, pues no sé la verdad. Simplemente lo que conozco de... Simplemente es una empresa grande. Tampoco tiene mucha historia. Sí que tiene responsabilidad y tal. Que se escucha de los clientes y tal. Bueno, la voz de los clientes y sin más.\"\n\n"
+    "Salida esperada:\n"
+    "{\n"
+    "  \"respondent_id\": 2,\n"
+    "  \"awareness\": 4,\n"
+    "  \"sentiment\": 4,\n"
+    "  \"differentiation\": 3,\n"
+    "  \"overall\": 4\n"
+    "}\n\n"
+
+    "### Ejemplo 2:\n"
+    "Marca asignada: CaixaBank\n\n"
+    "Fragmento 1:\n"
+    "\"Ibercaja, La Caixa, Sabadell, Van Ginder y NG Direct.\"\n\n"
+    "Fragmento 2:\n"
+    "\"CaixaBank me transmite seguridad, confianza y cercanía, sobre todo porque está en toda España, es una de las bancas más reconocidas a nivel nacional y bueno, siempre a través de la aplicación o cuando voy al banco pues siempre es súper fácil, accesible y como que entiende realmente lo que necesitamos y siempre buscan una mejor solución. Se diferencia yo creo por su humanidad, su compromiso social y sobre todo porque aparte de profesionalidad tiene esa cercanía con sus clientes. Entonces transmite mucha seguridad en cuanto al servicio que ofrecen sobre todo. Y finalmente la imagen de marca yo creo que es muy sólida, ya sea por su historia, por toda la trayectoria que ha pasado, pero también porque busca innovación. Desde por ejemplo... Todos los servicios que facilita a los jóvenes de hoy en día, todas las promociones que tiene. Además transmite como mucha la idea de colaboración y cercanía entre banco y sus clientes. Entonces yo creo que es bastante positiva la imagen que tiene.\"\n\n"
+    "Salida esperada:\n"
+    "{\n"
+    "  \"respondent_id\": 3,\n"
+    "  \"awareness\": 7,\n"
+    "  \"sentiment\": 5,\n"
+    "  \"differentiation\": 6,\n"
+    "  \"overall\": 6\n"
+    "}\n\n"
+
+    "Ahora analiza el siguiente testimonio hablado en dos partes. "
+    "Evalúa la percepción de marca del hablante asignando un valor numérico entre 1 y 7 en las siguientes dimensiones: awareness, sentiment, differentiation y overall.\n\n"
+
+    "La marca que se le ha asignado al hablante es: {brand}.\n\n"
+
+    "Contexto de las preguntas realizadas al hablante:\n"
+    "Fragmento 1 (awareness_audio) corresponde a la siguiente pregunta:\n"
+    "> “¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?”\n"
+    "Fragmento 2 (main_audio) corresponde a las siguientes tres preguntas sobre la marca asignada ({brand}):\n"
+    "> 1. ¿Qué te hace sentir {brand}?\n"
+    "> 2. ¿En qué aspectos crees que {brand} se diferencia de otras compañías bancarias?\n"
+    "> 3. Finalmente, ¿qué opinas de la imagen de marca de {brand}?\n\n"
+
+    "Fragmento 1 (awareness_audio):\n"
+    "\"{awareness_audio}\"\n\n"
+    "Fragmento 2 (main_audio):\n"
+    "\"{main_audio}\"\n\n"
+
+    "Formato de salida (JSON):\n"
+    "{\n"
+    "  \"respondent_id\": \"{respondent_id}\",\n"
+    "  \"awareness\": valor,\n"
+    "  \"sentiment\": valor,\n"
+    "  \"differentiation\": valor,\n"
+    "  \"overall\": valor\n"
+    "}\n\n"
+
+    "Devuelve solo el nuevo prompt mejorado, sin explicaciones adicionales."
+)
+```
+
+##### Prompt v5 for GPT4o
+
+```{python}
+import os
+from openai import OpenAI
+import time
+
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is not set or empty")
+client = OpenAI(api_key=api_key)
+```
+
+```{python}
+# # call the GPT-4o model
+# response = client.chat.completions.create(
+#     model="gpt-4o",
+#     messages=[
+#         {"role": "system", "content": "Eres un modelo especializado en ingeniería de prompts."},
+#         {"role": "user", "content": prompt_to_improve_v1}
+#     ],
+#     temperature=0.3
+# )
+# 
+# # get the response
+# prompt_v5_gpt = response.choices[0].message.content.strip()
+# 
+# # print the response
+# print("Prompt v5 for GPT-4o:")
+# print(prompt_v5_gpt)
+# 
+# # save the response locally
+# output_dir = "data/intermediate"
+# os.makedirs(output_dir, exist_ok=True)
+# output_path = os.path.join(output_dir, "prompt_v5_gpt.txt")
+# 
+# with open(output_path, "w", encoding="utf-8") as f:
+#     f.write(prompt_v5_gpt)
+# 
+# print(f"\n✅ Prompt v5 saved to {output_path}")
+```
+
+```{python}
+with open("data/intermediate/prompt_v5_gpt.txt", "r", encoding="utf-8") as f:
+    prompt_v5_gpt = f.read()
+print(prompt_v5_gpt)
+```
+
+In the revised version of the prompt generated by GPT-4o, several
+targeted improvements were introduced to enhance clarity and formatting.
+A key addition was the explicit instruction to “carefully consider each
+audio fragment to provide an accurate and consistent evaluation,” which
+emphasizes the importance of attentiveness and reliability in the
+scoring process. Structurally, the model reformatted the list of
+interview questions using bullet points and numbered lists instead of
+block text and quotation symbols, improving readability and facilitating
+better parsing by the model. In addition, some sentence structures were
+slightly rephrased for improved fluency, particularly in how the audio
+fragments and questions were introduced. These changes created a more
+natural and coherent flow without altering the original intent.
+Importantly, the output format—structured as a JSON object—was preserved
+exactly as in the original prompt, ensuring full compatibility with
+downstream data processing. Together, these adjustments contribute to a
+clearer and more consistent execution of the task by the model.
+
+##### Prompt v5 for Claude 3 Sonnet
+
+```{python}
+import os
+import anthropic
+import time
+
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+```
+
+```{python}
+# # Call the Claude 3 Sonnet model
+# response = client.messages.create(
+#     model="claude-3-5-sonnet-20240620",
+#     max_tokens=1024,
+#     temperature=0.3,
+#     system="You are an expert in prompt engineering.",
+#     messages=[
+#         {"role": "user", "content": prompt_to_improve_v2}
+#     ]
+# )
+# 
+# # get the response
+# prompt_v5_claude = response.content[0].text.strip()
+# 
+# # print the response
+# print("Prompt v5 for Claude 3 Sonnet:")
+# print(prompt_v5_claude)
+# 
+# # save the response locally
+# output_dir = "data/intermediate"
+# os.makedirs(output_dir, exist_ok=True)
+# output_path = os.path.join(output_dir, "prompt_v5_claude.txt")
+# 
+# with open(output_path, "w", encoding="utf-8") as f:
+#     f.write(prompt_v5_claude)
+# 
+# print(f"\n✅ Prompt v5 saved to {output_path}")
+
+```
+
+```{python}
+with open("data/intermediate/prompt_v5_claude.txt", "r", encoding="utf-8") as f:
+    prompt_v5_claude = f.read()
+print(prompt_v5_claude)
+```
+
+In the revised prompt generated by Claude, significant structural and
+instructional enhancements were introduced to improve task clarity,
+rating consistency, and overall interpretability. First, the prompt was
+reframed as a formal evaluation system, shifting from example-driven
+instruction to a rule-based format. This change established a clearer
+understanding of the task by explicitly defining the objective, input
+components, and evaluation procedure. Notably, Claude removed the
+illustrative examples and instead provided detailed scoring guidelines
+for each of the four dimensions—awareness, sentiment, differentiation,
+and overall. For each dimension, anchor points were defined along a
+1-to-7 scale, offering concrete criteria for scores of 1, 4, and 7. This
+adjustment is especially important for reducing subjectivity and
+improving rating consistency across model runs. Additionally, Claude
+introduced a fallback rule instructing the model to assign a neutral
+score (4) when insufficient information is present, further enhancing
+robustness. The formatting of the input questions was also improved,
+using natural language descriptors in place of markdown-style quotation
+markers, which aids in readability and model comprehension. Finally, the
+output instructions were clarified to ensure the model returns only a
+JSON object, with value ranges explicitly indicated as placeholders
+(e.g., [1–7]) to reinforce format expectations. Overall, these
+modifications demonstrate a comprehensive transformation of the prompt
+toward a more systematic and reliable evaluation protocol.
+
+##### Prompt v5 for Mistral 7B
+
+```{python}
+import os
+import json
+import requests
+
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+if not MISTRAL_API_KEY:
+    raise ValueError("MISTRAL_API_KEY environment variable is not set.")
+
+API_URL = "https://api.mistral.ai/v1/chat/completions"
+HEADERS = {
+    "Authorization": f"Bearer {MISTRAL_API_KEY}",
+    "Content-Type": "application/json"
+}
+MODEL = "mistral-large-2402"
+```
+
+```{python}
+# # call the model
+# payload = {
+#     "model": MODEL,
+#     "temperature": 0.3,
+#     "max_tokens": 1024,
+#     "messages": [
+#         {"role": "system", "content": "You are an expert in prompt engineering."},
+#         {"role": "user", "content": prompt_to_improve_v2}
+#     ]
+# }
+# 
+# # send the request
+# response = requests.post(API_URL, headers=HEADERS, json=payload)
+# 
+# # check the response status
+# if response.status_code != 200:
+#     raise RuntimeError(f"Request failed: {response.status_code} - {response.text}")
+# 
+# # get the response
+# response_json = response.json()
+# prompt_v5_mistral = response_json["choices"][0]["message"]["content"].strip()
+# 
+# # print the response
+# print("Prompt v5 for Mistral:")
+# print(prompt_v5_mistral)
+# 
+# # save the response as txt locally
+# output_dir = "data/intermediate"
+# os.makedirs(output_dir, exist_ok=True)
+# output_path = os.path.join(output_dir, "prompt_v5_mistral.txt")
+# 
+# with open(output_path, "w", encoding="utf-8") as f:
+#     f.write(prompt_v5_mistral)
+# 
+# print(f"\n✅ Prompt v5 saved to {output_path}")
+```
+
+```{python}
+with open("data/intermediate/prompt_v5_mistral.txt", "r", encoding="utf-8") as f:
+    prompt_v5_mistral = f.read()
+print(prompt_v5_mistral)
+```
+
+We can see that in the first line there is an unnecessary comment
+("Prompt mejorado:"), so I would like to delete it in case it creates
+confusions later
+
+```{python}
+# delete the first line: "Prompt mejorado:" 
+lines = prompt_v5_mistral.splitlines()
+if lines and lines[0].strip().lower().startswith("prompt mejorado"):
+    prompt_v5_mistral = "\n".join(lines[1:]).lstrip()
+
+# print the cleaned prompt
+print("✅ Cleaned prompt_v5_mistral:")
+print(prompt_v5_mistral)
+```
+
+In its revised version of the prompt, Mistral introduced a series of
+structural and linguistic refinements to improve clarity and efficiency.
+The most notable change is the complete removal of illustrative
+examples, which were replaced by a direct, instruction-based formulation
+of the task. This not only reduces token overhead but also simplifies
+the prompt's cognitive load. The overall structure was reorganized into
+clearly labeled sections—including question context, transcript
+fragments, output format, and detailed field descriptions—making the
+prompt more modular and easier for the model to parse. Furthermore,
+Mistral added short semantic explanations for each of the four scoring
+dimensions (awareness, sentiment, differentiation, and overall), which
+provides essential guidance for consistent evaluation. While it does not
+include explicit scoring criteria like Claude, this refinement still
+enhances interpretability. Overall, Mistral's improvements strike a
+balance between simplicity, structure, and functional clarity,
+positioning the prompt as a streamlined tool for consistent automated
+assessment.
 
 ## References
 
-Anthropic. (2024). *Messages API Reference*. Anthropic Documentation.
-<https://docs.anthropic.com/claude/reference/messages_post>
+Anthropic. (2023). *Claude Model Card*. Retrieved from
+<https://www.anthropic.com/index/model-card-claude>\
 
 Anthropic. (2024). *Claude 3 Technical Report*. Retrieved from
-<https://www.anthropic.com/news/claude-3-family>
+<https://www.anthropic.com/news/claude-3-family>\
+
+Anthropic. (2024). *Messages API Reference*. Anthropic Documentation.
+<https://docs.anthropic.com/claude/reference/messages_post>\
 
 Anthropic. (2025). *Claude 3 Pricing*. Retrieved from
 <https://www.anthropic.com/pricing>
@@ -2148,14 +3900,21 @@ Cohere. (2024). *Command R+ Overview*. Retrieved from
 Liang, P., Bai, Y., Chen, X., Du, N., ... & Liu, P. (2024). *Chatbot
 Arena and LMSYS Leaderboard*. Retrieved from <https://chat.lmsys.org>
 
+Liu, P., Yuan, W., Fu, J., Jiang, Z., Hayashi, H., & Neubig, G. (2023).
+*Pre-train Prompt Predict: Improving Performance of Pre-trained Language
+Models*. arXiv:2107.13586. <https://arxiv.org/abs/2107.13586>
+
 Mistral AI. (2023). *Introducing Mistral 7B*. Retrieved from
-<https://mistral.ai/news/mistral-7b/>
+<https://mistral.ai/news/mistral-7b/>\
 
 Mistral AI. (2024). *Mistral API Reference*. Mistral Documentation.
 <https://docs.mistral.ai/api/>
 
+OpenAI. (2023). *GPT-4 Technical Report*. arXiv:2303.08774.
+<https://arxiv.org/abs/2303.08774>\
+
 OpenAI. (2023). *Chat completions API*. OpenAI Developer Platform.
-<https://platform.openai.com/docs/guides/gpt/chat-completions-api>
+<https://platform.openai.com/docs/guides/gpt/chat-completions-api>\
 
 OpenAI. (2024). *GPT-4o System Card*. Retrieved from
 <https://openai.com/research/gpt-4o-system-card>
@@ -2164,8 +3923,8 @@ Touvron, H., Lavril, T., Izacard, G., Martinet, X., Lachaux, M. A.,
 Lacroix, T., ... & Scialom, T. (2023). *LLaMA 2: Open Foundation and
 Fine-Tuned Chat Models*. arXiv preprint arXiv:2307.09288.
 
-Wang et al. (2023): *"Guided Chain-of-Thought Prompting for Large
-Language Models in Multi-Step Reasoning"*, ACL.
+Wang, X., Wei, J., Shi, J., & Le, Q. (2023). *Guided Chain-of-Thought
+Prompting for Large Language Models in Multi-Step Reasoning*. ACL 2023.
 
 Wei, J., Wang, X., Schuurmans, D., Bosma, M., Ichter, B., Xia, F., ... &
 Le, Q. (2022). *Chain-of-Thought Prompting Elicits Reasoning in Large
@@ -2174,17 +3933,21 @@ Language Models*. arXiv preprint arXiv:2201.11903.
 Zhao, W., Chi, Y., Lin, J., & Huang, K. (2023). *Prompt Robustness in
 LLMs: An Empirical Study*. arXiv preprint arXiv:2309.01234.
 
-Zhao, Z., Wallace, E., & Wang, S. (2021). *Calibrate Before Use:
-Improving Few-Shot Performance of Language Models*. arXiv preprint
-arXiv:2102.09690.
-
 Zhao, Z., Deng, Y., Liu, Y., Xu, J., & Zhang, Z. (2024). *Are
 Open-Source LLMs Catching Up? A Comparative Study*. arXiv preprint
 arXiv:2402.03211.
 
-Zhou et al. (2022): *"Least-to-Most Prompting Enables Complex Reasoning
-in Large Language Models"*, ICML.
+Zhao, Z., Wallace, E., & Wang, S. (2021). *Calibrate Before Use:
+Improving Few-Shot Performance of Language Models*. arXiv preprint
+arXiv:2102.09690.
 
 Zhou, X., Madaan, A., Baral, C., & Yang, D. (2022). *Large Language
 Models are Human-Level Prompt Engineers*. arXiv preprint
 arXiv:2211.01910.
+
+Zhou, Y., Zhu, C., Jiang, M., Wang, J., & Ma, X. (2023). *A Benchmark
+Study of Prompting Strategies for Large Language Models*. arXiv preprint
+arXiv:2306.05301.
+
+Zhou, D., Schärli, N., Hou, L., & Li, X. (2022). *Least-to-Most
+Prompting Enables Complex Reasoning in Large Language Models*. ICML.

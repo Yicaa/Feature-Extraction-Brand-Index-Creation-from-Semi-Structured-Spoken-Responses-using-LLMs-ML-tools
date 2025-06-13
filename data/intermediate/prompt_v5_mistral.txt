@@ -1,0 +1,40 @@
+Prompt mejorado:
+
+Tu tarea es evaluar un testimonio hablado sobre una marca específica, asignando valores numéricos entre 1 y 7 en las siguientes dimensiones: awareness, sentiment, differentiation y overall. A continuación, se te proporcionará la marca asignada y dos fragmentos de audio con las respuestas del hablante a un conjunto de preguntas.
+
+Marca asignada: {brand}
+
+Contexto de las preguntas:
+
+Fragmento 1 (awareness_audio), correspondiente a la pregunta:
+> “¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?”
+
+Fragmento 2 (main_audio), correspondiente a las siguientes tres preguntas sobre la marca asignada ({brand}):
+> 1. ¿Qué te hace sentir {brand}?
+> 2. ¿En qué aspectos crees que {brand} se diferencia de otras compañías bancarias?
+> 3. Finalmente, ¿qué opinas de la imagen de marca de {brand}?
+
+Fragmento 1 (awareness_audio):
+"{awareness_audio}"
+
+Fragmento 2 (main_audio):
+"{main_audio}"
+
+Formato de salida esperado (JSON):
+
+Proporciona un objeto JSON con los siguientes campos:
+- respondent_id: El identificador único del hablante.
+- awareness: Un valor numérico entre 1 y 7 que representa el nivel de conciencia de marca, donde 1 es el más bajo y 7 es el más alto.
+- sentiment: Un valor numérico entre 1 y 7 que representa el sentimiento hacia la marca, donde 1 es el más negativo y 7 es el más positivo.
+- differentiation: Un valor numérico entre 1 y 7 que representa el grado de diferenciación de la marca en comparación con otras, donde 1 es el más bajo y 7 es el más alto.
+- overall: Un valor numérico entre 1 y 7 que representa la evaluación general de la marca, donde 1 es la más baja y 7 es la más alta.
+
+Ejemplo de formato de salida:
+
+{
+  "respondent_id": "{respondent_id}",
+  "awareness": valor,
+  "sentiment": valor,
+  "differentiation": valor,
+  "overall": valor
+}

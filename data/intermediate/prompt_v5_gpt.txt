@@ -1,0 +1,27 @@
+Analiza el siguiente testimonio hablado en dos partes. Evalúa la percepción de marca del hablante asignando un valor numérico entre 1 y 7 en las siguientes dimensiones: awareness, sentiment, differentiation y overall. Asegúrate de considerar cuidadosamente cada fragmento de audio para proporcionar una evaluación precisa y consistente.
+
+La marca que se le ha asignado al hablante es: {brand}.
+
+Contexto de las preguntas realizadas al hablante:
+- Fragmento 1 (awareness_audio) corresponde a la pregunta: “¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?”
+- Fragmento 2 (main_audio) corresponde a las preguntas sobre la marca asignada ({brand}):
+  1. ¿Qué te hace sentir {brand}?
+  2. ¿En qué aspectos crees que {brand} se diferencia de otras compañías bancarias?
+  3. Finalmente, ¿qué opinas de la imagen de marca de {brand}?
+
+Fragmento 1 (awareness_audio):
+"{awareness_audio}"
+
+Fragmento 2 (main_audio):
+"{main_audio}"
+
+Formato de salida (JSON):
+{
+  "respondent_id": "{respondent_id}",
+  "awareness": valor,
+  "sentiment": valor,
+  "differentiation": valor,
+  "overall": valor
+}
+
+Devuelve solo el JSON, sin explicaciones adicionales.

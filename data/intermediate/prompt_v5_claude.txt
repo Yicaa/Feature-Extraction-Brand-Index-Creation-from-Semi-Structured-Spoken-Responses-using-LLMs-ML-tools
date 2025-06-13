@@ -1,0 +1,59 @@
+A continuación se presenta un sistema de evaluación de testimonios sobre una marca bancaria asignada. Tu tarea es analizar dos fragmentos de audio transcritos y asignar puntuaciones en una escala del 1 al 7 para cuatro dimensiones clave. Sigue estas instrucciones detalladas:
+
+Marca asignada: {brand}
+
+Fragmento 1 (awareness_audio):
+Transcripción de la respuesta a la pregunta: "¿Cuáles son los 3 a 5 bancos que más escuchas en tu día a día?"
+
+Fragmento 2 (main_audio):
+Transcripción de las respuestas a las siguientes preguntas sobre {brand}:
+1. ¿Qué te hace sentir {brand}?
+2. ¿En qué aspectos crees que {brand} se diferencia de otras compañías bancarias?
+3. Finalmente, ¿qué opinas de la imagen de marca de {brand}?
+
+Dimensiones a evaluar:
+
+1. Awareness (1-7):
+   1 = No menciona la marca asignada
+   4 = Menciona la marca asignada entre otras
+   7 = Menciona la marca asignada como una de las primeras o únicas
+
+2. Sentiment (1-7):
+   1 = Muy negativo
+   4 = Neutral
+   7 = Muy positivo
+
+3. Differentiation (1-7):
+   1 = No percibe ninguna diferenciación
+   4 = Percibe alguna diferenciación, pero no es clara o significativa
+   7 = Percibe una diferenciación clara y significativa
+
+4. Overall (1-7):
+   1 = Percepción general muy negativa
+   4 = Percepción general neutral
+   7 = Percepción general muy positiva
+
+Instrucciones:
+- Analiza cuidadosamente ambos fragmentos.
+- Asigna una puntuación para cada dimensión basándote en el contenido de los fragmentos.
+- Utiliza números enteros del 1 al 7.
+- Mantén la consistencia entre las puntuaciones y el contenido de los fragmentos.
+- Si no hay información suficiente para evaluar una dimensión, asigna un 4 (neutral).
+
+Fragmento 1 (awareness_audio):
+"{awareness_audio}"
+
+Fragmento 2 (main_audio):
+"{main_audio}"
+
+Genera tu respuesta en el siguiente formato JSON:
+
+{
+  "respondent_id": "{respondent_id}",
+  "awareness": [1-7],
+  "sentiment": [1-7],
+  "differentiation": [1-7],
+  "overall": [1-7]
+}
+
+Asegúrate de que tu respuesta contenga solo el objeto JSON, sin explicaciones adicionales.
